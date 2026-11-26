@@ -25,6 +25,15 @@ describe("FleetChat", () => {
     expect(toneOf(security!)).toBe("security");
   });
 
+  it("a consolidação dos achados aparece com o nome e a cor do papel dela, e fala os defeitos que juntou", () => {
+    const [bubble] = renderFleet([
+      fleetAgent({ id: "a1", label: "consolidação", model: "opus", result: JSON.stringify({ findings: [{ title: "embalagem travada só na tela", members: ["c1", "c3"] }] }) }),
+    ]);
+    expect(within(bubble!).getByText("Consolidation")).toBeInTheDocument();
+    expect(within(bubble!).getByText("embalagem travada só na tela")).toBeInTheDocument();
+    expect(bubble!.closest("li")!.querySelector("[data-tone]")).toHaveAttribute("data-tone", "consolidation");
+  });
+
   it("verificações da mesma dimensão saem numeradas, com o avatar vazado", () => {
     const [, first, second] = renderFleet([
       fleetAgent({ id: "a1", label: "revisão:correctness", model: "sonnet" }),

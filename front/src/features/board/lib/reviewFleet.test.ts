@@ -62,6 +62,7 @@ describe("agentRole", () => {
   it.each([
     ["contexto", { kind: "context" }],
     ["juiz", { kind: "judge" }],
+    ["consolidação", { kind: "consolidation" }],
     ["revisão: correctness", { kind: "review", dimension: "correctness" }],
     ["verificação: repoRules · comentário narra a linha", { kind: "verification", dimension: "repoRules" }],
     ["revisão: outra", { kind: "other", label: "revisão: outra" }],

@@ -916,6 +916,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     // stays, now saying what is running (see `syncInflightMarker`).
     syncInflightMarker(session);
     maybeScheduleIdleStop(session);
+    event = { ...event, turnActive: isTurnInFlight(session) };
   }
   let silenced = false;
   if (event.type === "rewound") {

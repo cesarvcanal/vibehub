@@ -209,6 +209,7 @@ export interface ResultEvent {
   sessionId?: string;
   result?: string;
   permissionDenials?: unknown[];
+  turnActive?: boolean;
 }
 /**
  * ONE invocable command of the card's session — a SKILL, a plugin command, a project command in

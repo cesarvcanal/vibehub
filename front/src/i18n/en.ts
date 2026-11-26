@@ -1774,6 +1774,7 @@ export const en: Record<string, string> = {
   "review.fleet.finished": "Agents finished · {done} of {total}",
   "review.fleet.interrupted": "Fleet interrupted · {done} of {total} answered",
   "review.fleet.agent.context": "Context",
+  "review.fleet.agent.consolidation": "Consolidation",
   "review.fleet.agent.judge": "Judge",
   "review.fleet.agent.review": "{dimension} review",
   "review.fleet.agent.verification": "{dimension} check",

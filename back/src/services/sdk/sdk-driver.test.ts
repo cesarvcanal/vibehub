@@ -68,7 +68,18 @@ export function query({ prompt, options }) {
     }
     for await (const m of prompt) {
       const text = m.message.content;
-      yield { type: "system", subtype: "init", session_id: SESSION };
+      yield { type: "system", subtype: "init", session_id: SESSION, agents: ["general-purpose", "claude", ...Object.keys(options.agents ?? {})] };
+      if (text.startsWith("dispatch:")) {
+        const hookAnswer = await options.hooks.PreToolUse[0].hooks[0](JSON.parse(text.slice("dispatch:".length)));
+        mark("dispatch:" + JSON.stringify(hookAnswer));
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "" };
+        continue;
+      }
+      if (text === "registered-agents") {
+        mark("agents:" + JSON.stringify(options.agents ?? null));
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "" };
+        continue;
+      }
       if (text === "stubborn") {
         // Ignores the interrupt AND the closed channel; speaks again only after a NEWER stream exists.
         mark("stubborn:running");
@@ -874,6 +885,48 @@ describe("sdk-driver.mjs — subagentes", () => {
     expect(rewound.ok).toBe(true);
     expect(rewound.uuid).toBe("a-sub");
   }, 30_000);
+});
+
+describe("sdk-driver.mjs — pedido de Code Review", () => {
+  const reviewDispatch = {
+    tool_name: "Agent",
+    tool_input: { subagent_type: "general-purpose", description: "Code review · padrões", prompt: "Revise a branch atual" },
+  };
+
+  it("a sessão nasce com o perfil code-reviewer registrado, só leitura", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "registered-agents" });
+    const [mark] = await marksOnceThere(driver, "agents:", 1);
+    const agents = JSON.parse(mark!.slice("agents:".length)) as Record<string, { disallowedTools: string[] }>;
+    expect(Object.keys(agents)).toEqual(["code-reviewer"]);
+    expect(agents["code-reviewer"]!.disallowedTools).toContain("Edit");
+  });
+
+  it.each(["ask-sensitive", "same-as-terminal"])(
+    "com o gate %s, o hook recusa a revisão despachada como general-purpose e diz ao modelo para usar o code-reviewer",
+    async (gateMode) => {
+      const driver = startDriver(["--permission-gate", gateMode]);
+      await driver.waitFor((e) => e.type === "ready");
+      const from = driver.events.length;
+      driver.send({ type: "user", text: "dispatch:" + JSON.stringify(reviewDispatch) });
+      const [mark] = await marksOnceThere(driver, "dispatch:", 1);
+      const hookAnswer = JSON.parse(mark!.slice("dispatch:".length)) as { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string } };
+      expect(hookAnswer.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(hookAnswer.hookSpecificOutput.permissionDecisionReason).toContain('subagent_type "code-reviewer"');
+      const denied = await driver.waitFor((e) => e.type === "permission" && e.decision === "deny", from);
+      expect(denied).toMatchObject({ tool: "Agent", sensitive: false });
+    },
+  );
+
+  it("a revisão despachada no code-reviewer segue sem recusa", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    const toReviewer = { ...reviewDispatch, tool_input: { ...reviewDispatch.tool_input, subagent_type: "code-reviewer" } };
+    driver.send({ type: "user", text: "dispatch:" + JSON.stringify(toReviewer) });
+    const [mark] = await marksOnceThere(driver, "dispatch:", 1);
+    expect(JSON.parse(mark!.slice("dispatch:".length))).toEqual({});
+  });
 });
 
 /**

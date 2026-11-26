@@ -1786,6 +1786,7 @@ export const ptBR: Record<string, string> = {
   "review.fleet.finished": "Agentes concluídos · {done} de {total}",
   "review.fleet.interrupted": "Frota interrompida · {done} de {total} responderam",
   "review.fleet.agent.context": "Contexto",
+  "review.fleet.agent.consolidation": "Consolidação",
   "review.fleet.agent.judge": "Juiz",
   "review.fleet.agent.review": "Revisão de {dimension}",
   "review.fleet.agent.verification": "Verificação de {dimension}",

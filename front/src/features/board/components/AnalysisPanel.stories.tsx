@@ -95,6 +95,28 @@ export const AptoComMerge: Story = {
   parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), canMerge: true } },
 };
 
+export const AptoTestesDoMergeVerdes: Story = {
+  name: "Apto · testes do merge verdes",
+  parameters: {
+    analysis: {
+      ...readModel(report({ findings: [fixedBlocking] }), "apt"),
+      canMerge: true,
+      mergeGate: { cardId: CARD_ID, analysedSha: report().analysedSha, sha: "160f659".padEnd(40, "0"), state: "passed", at: 1 },
+    },
+  },
+};
+
+export const AptoTestesDoMergeRodando: Story = {
+  name: "Apto · testes do merge rodando",
+  parameters: {
+    analysis: {
+      ...readModel(report({ findings: [fixedBlocking] }), "apt"),
+      canMerge: true,
+      mergeGate: { cardId: CARD_ID, analysedSha: report().analysedSha, sha: "160f659".padEnd(40, "0"), state: "running", at: 1 },
+    },
+  },
+};
+
 export const AptoMergeando: Story = {
   name: "Apto · merge rodando no servidor",
   parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), canMerge: true, merging: true } },

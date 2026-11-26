@@ -145,6 +145,16 @@ describe("applySdkEvent", () => {
     expect(bad.rows[0]).toMatchObject({ kind: "error", text: "boom" });
   });
 
+  it("o result do turno cortado por um envio urgente mantém o turno aceso quando o back diz que outro segue em voo", () => {
+    const cut = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+      { type: "result", isError: false, turnActive: true },
+    ]);
+    expect(cut.turnActive).toBe(true);
+    expect(applySdkEvent(cut, { type: "result", isError: false, turnActive: false }).turnActive).toBe(false);
+  });
+
   /**
    * The MUTE bubble: an interrupted turn comes back as `is_error` with no `result` text, and the
    * reducer used to write the bare string "error" into a red row. Two rules replaced it.

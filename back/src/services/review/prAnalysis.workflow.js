@@ -1,9 +1,10 @@
 export const meta = {
   name: 'vibehub-pr-analysis',
-  description: 'Análise de PR do vibehub: especialistas em paralelo, verificação adversarial e juiz',
+  description: 'Análise de PR do vibehub: especialistas em paralelo, achados repetidos consolidados, verificação adversarial e juiz',
   phases: [
     { title: 'Contexto', model: 'sonnet' },
     { title: 'Revisão', model: 'sonnet' },
+    { title: 'Consolidação', model: 'opus' },
     { title: 'Verificação', model: 'sonnet' },
     { title: 'Julgamento', model: 'opus' },
   ],
@@ -82,6 +83,24 @@ const REVIEW_SCHEMA = {
   required: ['findings'],
 }
 
+const CONSOLIDATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { ...NON_BLANK_TEXT, maxLength: 300 },
+          members: { type: 'array', minItems: 1, items: { type: 'string' } },
+        },
+        required: ['title', 'members'],
+      },
+    },
+  },
+  required: ['findings'],
+}
+
 const VERDICT_SCHEMA = {
   type: 'object',
   properties: { confirmed: { type: 'boolean' }, evidence: { type: 'string' } },
@@ -154,19 +173,40 @@ const reviewPrompt = (dimension, brief) =>
   'Para cada achado: title (uma linha), problem (o que está errado e o que acontece se ficar assim, para quem não abre ' +
   'o código), file e line, proof, fix (o que mudar e onde) e suggestedSeverity. Nenhum achado é uma resposta válida.'
 
-const verifyPrompt = (finding, dimension, brief) =>
-  `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
-  `Achado: ${JSON.stringify(finding)}\n` +
+const indentUnderFinding = (text) => text.split('\n').map((line) => `    ${line}`).join('\n')
+
+const reviewLabel = (dimension) => `revisão: ${dimension.key}`
+
+const candidateText = (candidate) => `[${reviewLabel(candidate.dimension)}] ${JSON.stringify(candidate.finding)}`
+
+const consolidationPrompt = (candidates) =>
+  `Você consolida os achados dos revisores do PR #${args.prNumber} antes da verificação. ${READ_ONLY_RULE}\n` +
+  'Não julgue se os achados procedem (isso é da verificação): diga só quais descrevem o MESMO defeito. Cada revisor ' +
+  'viu o PR por uma dimensão, sem ver os outros, então o mesmo defeito pode vir com palavras, linhas e provas diferentes.\n' +
+  'Achados, um por linha, com o id na frente:\n' +
+  candidates.map((candidate) => `${candidate.id} ${candidateText(candidate)}`).join('\n') +
+  '\nJunte dois achados só quando são o mesmo defeito: a mesma causa, e a mesma correção resolve os dois. Achados no ' +
+  'mesmo arquivo e linha com causa ou correção diferente ficam separados; na dúvida, separados. Cada id entra em ' +
+  'exatamente um grupo, inclusive o achado que não se repete (grupo de um). O title do grupo nomeia o defeito em uma linha.'
+
+const verifyPrompt = (group, brief) =>
+  `Tente DERRUBAR este achado do PR #${args.prNumber}: ${group.title}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
+  (group.members.length === 1
+    ? 'Como o revisor o descreveu:\n'
+    : `${group.members.length} revisores, sem ver um ao outro, apontaram este mesmo defeito; cada descrição traz a sua prova:\n`) +
+  `${group.members.map(candidateText).join('\n')}\n` +
   'Confira no código: a linha existe, o cenário acontece de verdade, a regra citada diz isso. Quando um teste existente ' +
   'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. ' +
   'Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência, cada um uma frase curta.'
 
-const indentUnderFinding = (text) => text.split('\n').map((line) => `    ${line}`).join('\n')
+const confirmedGroupText = (confirmed) =>
+  `- ${confirmed.group.title}\n  Como cada revisor o descreveu:\n${indentUnderFinding(confirmed.group.members.map(candidateText).join('\n'))}\n` +
+  `  Verificação:\n${indentUnderFinding(confirmed.evidence)}`
 
-const judgePrompt = (confirmedFindings, brief) =>
+const judgePrompt = (confirmedGroups, brief) =>
   `Você é o juiz da análise do PR #${args.prNumber}, sem o contexto de quem revisou. ${READ_ONLY_RULE}\n${briefText(brief)}\n${diffScope}\n` +
   'Achados confirmados pela verificação, de todas as dimensões:\n' +
-  confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)}\n  Verificação:\n${indentUnderFinding(confirmed.evidence)}`).join('\n') +
+  confirmedGroups.map(confirmedGroupText).join('\n') +
   '\nJunte os repetidos (o mesmo defeito visto por duas dimensões vira um achado, na dimensão mais precisa) e classifique ' +
   'cada um: blocking (bug ou regra violada, com prova; a IA corrige sozinha), improvement (melhoria no código que o PR ' +
   'mexe, que preserva o comportamento e que nenhuma regra escrita exige), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
@@ -183,63 +223,94 @@ const skippedDimensions = DIMENSIONS.filter(isOutsideDiff)
   .map((dimension) => ({ key: dimension.key, status: 'skipped', reason: briefByDimension.get(dimension.key).reason }))
 for (const skipped of skippedDimensions) log(`${skipped.key} fora do diff: ${skipped.reason}`)
 
-const reviewLabel = (dimension) => `revisão: ${dimension.key}`
-
 const VERIFY_LABEL_TITLE_MAX = 80
-const verifyLabel = (dimension, finding) => `verificação: ${dimension.key} · ${finding.title.slice(0, VERIFY_LABEL_TITLE_MAX)}`
+const verifyLabel = (group) => `verificação: ${group.members[0].dimension.key} · ${group.title.slice(0, VERIFY_LABEL_TITLE_MAX)}`
 
-const notRunResult = (dimension, reason) => ({ run: { key: dimension.key, status: 'not_run', reason }, confirmed: [], refutedCount: 0 })
+phase('Revisão')
+const reviews = await parallel(applicableDimensions.map((dimension) => () => agent(reviewPrompt(dimension, brief), {
+  label: reviewLabel(dimension), phase: 'Revisão', model: 'sonnet', effort: 'high', schema: REVIEW_SCHEMA,
+})))
 
-const verifyDimension = async (review, dimension) => {
-  if (!review) return notRunResult(dimension, 'o agente de revisão não respondeu')
-  const verifiedFindings = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
-  const aboveCapCount = review.findings.length - verifiedFindings.length
+const reviewedDimensions = applicableDimensions.map((dimension, index) => {
+  const review = reviews[index]
+  if (!review) return { dimension, findingsWithinCap: [], aboveCapCount: 0, answered: false }
+  const findingsWithinCap = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
+  return { dimension, findingsWithinCap, aboveCapCount: review.findings.length - findingsWithinCap.length, answered: true }
+})
+
+const candidates = reviewedDimensions
+  .flatMap((reviewed) => reviewed.findingsWithinCap.map((finding) => ({ dimension: reviewed.dimension, finding })))
+  .map((candidate, index) => ({ ...candidate, id: `c${index + 1}` }))
+const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+
+const findPartitionProblem = (consolidation) => {
+  if (!consolidation) return 'o agente de consolidação não respondeu'
+  const hasNoMembers = (group) => !Array.isArray(group.members) || group.members.length === 0
+  const emptyGroupTitles = consolidation.findings.filter(hasNoMembers).map((group) => group.title)
+  if (emptyGroupTitles.length > 0) return `devolveu grupo sem achado (${emptyGroupTitles.join(', ')})`
+  const memberIds = consolidation.findings.flatMap((group) => group.members)
+  const unknownIds = memberIds.filter((id) => !candidateById.has(id))
+  if (unknownIds.length > 0) return `citou achado que não existe (${unknownIds.join(', ')})`
+  const repeatedIds = memberIds.filter((id, index) => memberIds.indexOf(id) !== index)
+  if (repeatedIds.length > 0) return `pôs achado em mais de um grupo (${repeatedIds.join(', ')})`
+  const missingIds = candidates.map((candidate) => candidate.id).filter((id) => !memberIds.includes(id))
+  if (missingIds.length > 0) return `deixou achado de fora (${missingIds.join(', ')})`
+  return ''
+}
+
+const singleFindingGroups = candidates.map((candidate) => ({ title: candidate.finding.title, members: [candidate] }))
+
+const consolidateCandidates = async () => {
+  if (candidates.length < 2) return singleFindingGroups
+  phase('Consolidação')
+  const consolidation = await agent(consolidationPrompt(candidates), {
+    label: 'consolidação', phase: 'Consolidação', model: 'opus', effort: 'high', schema: CONSOLIDATION_SCHEMA,
+  })
+  const partitionProblem = findPartitionProblem(consolidation)
+  if (partitionProblem) {
+    log(`consolidação: ${partitionProblem}; cada achado é verificado sozinho`)
+    return singleFindingGroups
+  }
+  return consolidation.findings.map((group) => ({ title: group.title, members: group.members.map((id) => candidateById.get(id)) }))
+}
+
+const findingGroups = await consolidateCandidates()
+
+phase('Verificação')
+const verdicts = await parallel(findingGroups.map((group) => () => agent(verifyPrompt(group, brief), {
+  label: verifyLabel(group), phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
+})))
+const checkedGroups = findingGroups.map((group, index) => ({ group, verdict: verdicts[index] }))
+const confirmedGroups = checkedGroups
+  .filter((checked) => checked.verdict?.confirmed)
+  .map((checked) => ({ group: checked.group, evidence: checked.verdict.evidence }))
+const refutedCount = checkedGroups.filter((checked) => checked.verdict && !checked.verdict.confirmed).length
+const membersWithoutVerdict = checkedGroups.filter((checked) => !checked.verdict).flatMap((checked) => checked.group.members)
+
+const dimensionRunOf = ({ dimension, aboveCapCount, answered }, unverifiedMembers) => {
+  if (!answered) return { key: dimension.key, status: 'not_run', reason: 'o agente de revisão não respondeu' }
   const capReason = aboveCapCount === 1
     ? `1 achado acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foi verificado`
     : `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
-  if (aboveCapCount > 0) log(`${dimension.key}: ${capReason}`)
-  const verdicts = await parallel(verifiedFindings.map((finding) => () => agent(verifyPrompt(finding, dimension, brief), {
-    label: verifyLabel(dimension, finding), phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
-  })))
-  const checkedFindings = verifiedFindings.map((finding, index) => ({ finding, verdict: verdicts[index] }))
-  const confirmed = checkedFindings
-    .filter((checked) => checked.verdict?.confirmed)
-    .map((checked) => ({ finding: checked.finding, label: reviewLabel(dimension), evidence: checked.verdict.evidence }))
-  const refutedCount = checkedFindings.filter((checked) => checked.verdict && !checked.verdict.confirmed).length
-  const withoutVerdictCount = checkedFindings.filter((checked) => !checked.verdict).length
+  const withoutVerdictCount = unverifiedMembers.filter((member) => member.dimension === dimension).length
   const withoutVerdictReason = `${withoutVerdictCount} ${withoutVerdictCount === 1 ? 'achado sem veredito' : 'achados sem veredito'} (o verificador não respondeu)`
-  if (withoutVerdictCount > 0) log(`${dimension.key}: ${withoutVerdictReason}`)
   const reasons = [aboveCapCount > 0 ? capReason : '', withoutVerdictCount > 0 ? withoutVerdictReason : ''].filter(Boolean)
   const unverifiedCount = aboveCapCount + withoutVerdictCount
   return {
-    run: {
-      key: dimension.key,
-      status: 'ran',
-      ...(unverifiedCount > 0 ? { unverifiedCount, reason: reasons.join('; ') } : {}),
-    },
-    confirmed,
-    refutedCount,
+    key: dimension.key,
+    status: 'ran',
+    ...(unverifiedCount > 0 ? { unverifiedCount, reason: reasons.join('; ') } : {}),
   }
 }
 
-phase('Revisão')
-const reviewedDimensions = await pipeline(
-  applicableDimensions,
-  (dimension) => agent(reviewPrompt(dimension, brief), {
-    label: reviewLabel(dimension), phase: 'Revisão', model: 'sonnet', effort: 'high', schema: REVIEW_SCHEMA,
-  }),
-  verifyDimension,
-)
-
-const dimensionResults = reviewedDimensions.map((result, index) =>
-  result ?? notRunResult(applicableDimensions[index], 'a revisão desta dimensão falhou'))
-const confirmedFindings = dimensionResults.flatMap((result) => result.confirmed)
-const refutedCount = dimensionResults.reduce((total, result) => total + result.refutedCount, 0)
+const dimensionRuns = reviewedDimensions.map((reviewed) => dimensionRunOf(reviewed, membersWithoutVerdict))
+const partiallyVerifiedRuns = dimensionRuns.filter((run) => run.status === 'ran' && run.reason)
+for (const run of partiallyVerifiedRuns) log(`${run.key}: ${run.reason}`)
 
 phase('Julgamento')
-const judgment = confirmedFindings.length === 0
+const judgment = confirmedGroups.length === 0
   ? { findings: [] }
-  : await agent(judgePrompt(confirmedFindings, brief), { label: 'juiz', phase: 'Julgamento', model: 'opus', effort: 'high', schema: JUDGMENT_SCHEMA })
+  : await agent(judgePrompt(confirmedGroups, brief), { label: 'juiz', phase: 'Julgamento', model: 'opus', effort: 'high', schema: JUDGMENT_SCHEMA })
 if (!judgment) throw new Error('o juiz da análise não respondeu')
 
 const judgedFindings = judgment.findings.map((finding, index) => {
@@ -250,7 +321,7 @@ const judgedFindings = judgment.findings.map((finding, index) => {
 
 return {
   summary: brief.summary,
-  dimensions: [...dimensionResults.map((result) => result.run), ...skippedDimensions],
+  dimensions: [...dimensionRuns, ...skippedDimensions],
   findings: judgedFindings,
   refutedCount,
 }

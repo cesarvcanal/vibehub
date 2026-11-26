@@ -75,6 +75,7 @@ Every value placed in the line is validated (paths, card id, session id, URLs) a
 - `includePartialMessages: true` (live deltas), `thinking: { type: "adaptive", display:
   "summarized" }` (on current models the default display is `omitted`, and thinking blocks arrive
   with empty text), `agentProgressSummaries: true` (a per-subagent "what it is doing now" line);
+- `agents: { "code-reviewer": … }`: the Code Review subagent profile (see "Code review routing");
 - `model` and `effort` when the card pins them. No `allowedTools`.
 
 ### One driver per card
@@ -378,6 +379,39 @@ silences because `canUseTool` only serves questions here). vibehub writes no all
 `runnerSettingsJson` sets only `permissions.defaultMode: "bypassPermissions"`, and the driver passes
 no `allowedTools`. A repository's own committed `.claude/settings.json` may still carry allow
 rules; that is the project's choice.
+
+### Code review routing
+
+Claude Code ships no code review subagent type: the built-in `code-review` skill forks into a
+`general-purpose` subagent, and review skills that dispatch reviewers (such as
+`mattpocock-skills:code-review`) name no type, so the model picks `general-purpose`. The driver
+registers its own profile, `code-reviewer` (`CODE_REVIEWER_AGENT`): no editing tools (no `Edit`,
+`Write`, `NotebookEdit` or `Agent`; `Bash` stays, so "never edit" is an instruction, not a lock),
+the project's `CLAUDE.md` and `AGENTS.md` as the review standard (the SDK hands an `agents` subagent
+the `CLAUDE.md` files unless `omitClaudeMd` is set), and a report whose first line names the profile
+and that opens with a `## Aderência` table (each instruction and skill considered, its status, and
+the command or `file:line` that proves it; no evidence means `não verificado`).
+
+Before the permission gate, in both modes, `reviewRoutingDenial` denies:
+
+- an `Agent` call whose `subagent_type` is `general-purpose`, `claude` or absent and whose
+  description mentions a review (or whose prompt says "code review" or "revise a branch / o diff /
+  o PR"), telling the model to dispatch the same description and prompt with
+  `subagent_type: "code-reviewer"`. A description that asks to fix or apply something (`corrig`,
+  `aplic`, `apply`, `fix`, `implement`) is not a review: applying review findings needs the editing
+  tools the profile lacks;
+- a `Skill` call for the built-in `code-review`, telling the model to pass its args to
+  `code-reviewer` instead; called from inside `code-reviewer` (the hook's `agent_type`), it tells the
+  profile to review in its own context.
+
+The match is on the dispatch's text, so a review named and worded otherwise ("Auditoria", "check
+the change") still runs as `general-purpose`.
+
+Specialised types (`Explore`, `feature-dev:code-reviewer`, a project's own agents) pass untouched.
+When the session's `init` does not list `code-reviewer`, the same calls are denied with a message
+that tells the model to report to the person that Code Review is unavailable, never to fall back to
+`general-purpose`. Each denial is also emitted as `permission { decision: "deny", sensitive: false,
+reason }`. The Terminal tab's TUI session does not run this hook.
 
 ## Questions (AskUserQuestion)
 

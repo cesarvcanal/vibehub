@@ -30,12 +30,20 @@ const longEvidence = [
 const agent = (over: Partial<ReviewFleetAgent> & Pick<ReviewFleetAgent, "id" | "label">): ReviewFleetAgent => ({ phase: "", status: "done", ...over });
 
 const busyFleet: ReviewFleetRun = {
-  runId: "wf_story", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação"], total: 9, done: 6, at: minute(9), finished: false,
+  runId: "wf_story", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Consolidação", "Verificação"], total: 10, done: 7, at: minute(9), finished: false,
   agents: [
     agent({ id: "a1", label: "contexto", model: "claude-opus-5-5", modelLabel: "Opus 5.5", endedAt: minute(0), result: JSON.stringify({ summary: contextSummary }) }),
     agent({ id: "a2", label: "revisão:performance", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", endedAt: minute(2), result: JSON.stringify({ findings: [{ title: "useTweenedNumber chama matchMedia a cada frame da animação" }] }) }),
     agent({ id: "a3", label: "revisão:contracts", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", endedAt: minute(3), result: JSON.stringify({ findings: [{ title: "Testes do medidor esperam 700ms no relógio real" }, { title: "pillPercent devolve null sem fiveHour" }] }) }),
     agent({ id: "a4", label: "revisão:security", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", endedAt: minute(3), result: JSON.stringify({ findings: [] }) }),
+    agent({
+      id: "a10", label: "consolidação", model: "claude-opus-5-5", modelLabel: "Opus 5.5", endedAt: minute(4),
+      result: JSON.stringify({ findings: [
+        { title: "useTweenedNumber chama matchMedia a cada frame da animação", members: ["c1"] },
+        { title: "Testes do medidor esperam 700ms no relógio real", members: ["c2"] },
+        { title: "pillPercent devolve null sem fiveHour", members: ["c3"] },
+      ] }),
+    }),
     agent({ id: "a5", label: "verificação:performance · useTweenedNumber chama matchMedia a cada frame da animação", model: "claude-haiku-4-5", modelLabel: "Haiku 4.5", endedAt: minute(5), result: JSON.stringify({ confirmed: true, evidence: longEvidence }) }),
     agent({ id: "a6", label: "verificação:contracts · Testes do medidor esperam 700ms no relógio real", model: "claude-haiku-4-5", modelLabel: "Haiku 4.5", endedAt: minute(6), result: JSON.stringify({ confirmed: false, evidence: "Os testes usam `vi.useFakeTimers` desde a linha 12 e avançam 700ms com `vi.advanceTimersByTime`." }) }),
     agent({ id: "a7", label: "revisão:tests", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "stopped" }),
