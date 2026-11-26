@@ -185,8 +185,8 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
       <div
         className={cn(
           "flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 text-xs",
-          passedSha && "rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1.5",
-          (gateRunning || merging) && "rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5",
+          (passedSha || gateRunning || merging) && "rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5",
+          passedSha && "border-emerald-500/30 bg-emerald-500/5",
         )}
       >
         {gateRunning ? (
