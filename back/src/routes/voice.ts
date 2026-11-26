@@ -150,7 +150,8 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         if (!(await registry.getCard(req.params.id))) return await reply.code(404).send({ error: "card not found" });
         const drop = parseVoiceDrop(req.body);
         const user = await requestUser(req);
-        logger.warn({ action: "voice.drop", card: req.params.id, by: user?.username, ...drop }, "voice call dropped");
+        if (!user) return await reply.code(401).send({ error: "not authenticated" });
+        logger.warn({ action: "voice.drop", card: req.params.id, by: user.username, ...drop }, "voice call dropped");
         return await reply.code(204).send();
       } catch (err) {
         if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
