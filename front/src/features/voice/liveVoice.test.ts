@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, RECONNECT_DELAYS_MS, START_TIMEOUT_MS, STATS_INTERVAL_MS, errorMessage } from "./liveVoice";
+import {
+  CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, RECONNECT_DELAYS_MS, RECONNECT_STEADY_DELAY_MS, START_TIMEOUT_MS, STATS_INTERVAL_MS,
+  UNCONFIRMED_SESSIONS_MAX, errorMessage,
+} from "./liveVoice";
 import { fakeRig, FakeStream } from "./fakeWebRtc";
 import type { VoiceDropReport } from "../../api/types";
 
@@ -366,7 +369,7 @@ describe("LiveVoiceSession — dropped connection", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await advanceUntilNextTry(secondsLeft - 1);
     };
-    await advanceUntilNextTry(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]! / 1_000);
+    await advanceUntilNextTry(RECONNECT_STEADY_DELAY_MS / 1_000);
     expect(rig.exchanges.length).toBeGreaterThan(triesWhileDown);
     rig.peer().channel!.emit({ type: "session.started", session: { id: "live_n" } });
     expect(session.snapshot()).toMatchObject({ state: "live", notice: null });
@@ -384,14 +387,55 @@ describe("LiveVoiceSession — dropped connection", () => {
     await liveSession(rig);
     network.up = false;
     rig.peer().fail();
-    const steadyWait = RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]!;
-    const waits = [...RECONNECT_DELAYS_MS, steadyWait, steadyWait];
+    const waits = [...RECONNECT_DELAYS_MS, RECONNECT_STEADY_DELAY_MS, RECONNECT_STEADY_DELAY_MS];
     for (const [index, wait] of waits.entries()) {
       await vi.advanceTimersByTimeAsync(wait - 1);
       expect(rig.exchanges).toHaveLength(1 + index);
       await vi.advanceTimersByTimeAsync(1);
       expect(rig.exchanges).toHaveLength(2 + index);
     }
+  });
+
+  it("a server that answers with a refusal during the reconnect ends the call with its message", async () => {
+    vi.useFakeTimers();
+    const answers = [{ sessionId: "live_1", sdp: "v=0 answer" }];
+    const rig = fakeRig({
+      exchangeOffer: async () => {
+        const answer = answers.shift();
+        if (!answer) throw { response: { data: { error: "OpenAI rejected the API key" } } };
+        return answer;
+      },
+    });
+    const { session } = await liveSession(rig);
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(session.snapshot()).toMatchObject({ state: "error", error: "OpenAI rejected the API key", notice: null });
+    expect(rig.exchanges).toHaveLength(2);
+  });
+
+  it("a microphone refused during the reconnect ends the call saying so", async () => {
+    vi.useFakeTimers();
+    const microphone = { allowed: true };
+    const rig = fakeRig({
+      getUserMedia: async () => {
+        if (!microphone.allowed) throw Object.assign(new Error("denied"), { name: "NotAllowedError" });
+        return new FakeStream();
+      },
+    });
+    const { session } = await liveSession(rig);
+    microphone.allowed = false;
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.micDenied" });
+  });
+
+  it("sessions the server created but that never come up stop after a few, so they are not billed forever", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(rig.exchanges).toHaveLength(1 + UNCONFIRMED_SESSIONS_MAX);
+    expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.startTimeout" });
   });
 
   it("a reconnect that never confirms the session counts as a failed attempt", async () => {
