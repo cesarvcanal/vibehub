@@ -820,6 +820,24 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
   });
 });
 
+describe("result — a tela fica sabendo se outro turno segue em andamento", () => {
+  const resultFrames = (socket: FakeSocket) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string; turnActive?: boolean }).filter((frame) => frame.type === "result");
+
+  it("o result do turno cortado por um envio urgente diz que o turno do envio ainda vem; o último diz que acabou", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"roda a suíte"}`));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"[pedido por voz]\\nqual é a branch?","now":true}`));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false, subtype: "error_during_execution" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "card/x" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    expect(resultFrames(socket).map((frame) => frame.turnActive)).toEqual([true, false]);
+  });
+});
+
 describe("end of life", () => {
   it("o close ATRASADO do driver velho não apaga a memória de dedupe do sucessor", () => {
     forgetDriverKeys(CARD);
