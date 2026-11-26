@@ -346,6 +346,46 @@ async function canUseTool(toolName, input) {
   return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, toModel) } };
 }
 
+const CODE_REVIEWER_AGENT_TYPE = "code-reviewer";
+const GENERIC_AGENT_TYPES = new Set(["general-purpose", "claude"]);
+const REVIEW_DESCRIPTION = /code[\s-]?review|\breview|\brevis/i;
+const REVIEW_PROMPT = /code[\s-]?review/i;
+const GENERAL_PURPOSE_REVIEW_SKILL = "code-review";
+const CODE_REVIEWER_AGENT = {
+  description: "Code Review: reviews a change (diff, branch or PR) against the project's own rules and reports findings with evidence. Use it for every code review, never general-purpose.",
+  disallowedTools: ["Edit", "Write", "NotebookEdit", "Agent"],
+  prompt: [
+    "You are the Code Review profile of vibehub. You review the change the dispatcher names; you never edit files, commit, push or dispatch other agents.",
+    "",
+    "Rules: the project's instruction files are the standard of this review: the CLAUDE.md files in your context and every AGENTS.md (or file they import) the repository has. Open the ones not in your context before reviewing. Where they say how to review (method, severities, report format), follow them over this prompt.",
+    "",
+    "Method: read the diff and what calls or consumes the changed code; for each finding give file:line, the concrete scenario that fails, the rule or the evidence that proves it, and the severity in the project's terms. Separate fact from hypothesis and say what you did not verify.",
+    "",
+    "Report, in the language of the dispatcher's request. It OPENS with the section `## Aderência`: a table with one row per instruction (file and section) and per skill you considered, with columns item, status and evidence. Status is `seguido`, `não seguido` or `não se aplica`; the evidence is the command you ran with its result, or the file:line you read. A row whose evidence you cannot show is `não verificado`, never `seguido`. Every item the dispatcher asked for that you did not do is listed with the reason. The findings come after that section.",
+  ].join("\n"),
+};
+
+function isReviewDispatch(toolInput) {
+  return REVIEW_DESCRIPTION.test(String(toolInput.description ?? "")) || REVIEW_PROMPT.test(String(toolInput.prompt ?? ""));
+}
+
+function reviewRoutingDenial(toolName, toolInput, availableAgentTypes) {
+  const forkedReviewSkill = toolName === "Skill"
+    && String(toolInput.skill ?? "").replace(/^\//, "") === GENERAL_PURPOSE_REVIEW_SKILL;
+  const genericReviewDispatch = (toolName === "Agent" || toolName === "Task")
+    && GENERIC_AGENT_TYPES.has(toolInput.subagent_type ?? "general-purpose")
+    && isReviewDispatch(toolInput);
+  if (!forkedReviewSkill && !genericReviewDispatch) return null;
+  const reviewerAvailable = Array.isArray(availableAgentTypes) && availableAgentTypes.includes(CODE_REVIEWER_AGENT_TYPE);
+  if (!reviewerAvailable) {
+    return `Blocked by vibehub: this is a code review, and the Code Review profile (subagent_type "${CODE_REVIEWER_AGENT_TYPE}") is not available in this session. Tell the person the review could not run as Code Review, and why; never run it as general-purpose, and never present another agent's result as a Code Review.`;
+  }
+  const how = forkedReviewSkill
+    ? `The built-in code-review skill runs in a general-purpose subagent. Dispatch the Agent tool with subagent_type "${CODE_REVIEWER_AGENT_TYPE}" instead, with this skill's args as the request, verbatim.`
+    : `Dispatch it again with subagent_type "${CODE_REVIEWER_AGENT_TYPE}", the same description and the same prompt.`;
+  return `Blocked by vibehub: code reviews run in the Code Review profile, never in general-purpose. ${how} If the project's CLAUDE.md maps a skill to code review and you have not invoked it this turn, invoke it first. Tell the person which profile ran the review.`;
+}
+
 // PreToolUse hook — mirror of `sdkGateAction` in protocol.ts. "same-as-terminal": everything is
 // allowed (the Terminal tab's behaviour), only observability events are emitted. "ask-sensitive":
 // auto-allow the bulk; a SENSITIVE call becomes a `permission_request` in the chat and the agent's
@@ -353,6 +393,11 @@ async function canUseTool(toolName, input) {
 async function preToolUse(input) {
   const name = input.tool_name;
   const toolInput = input.tool_input ?? {};
+  const routingDenial = reviewRoutingDenial(name, toolInput, lastInit?.agents);
+  if (routingDenial) {
+    emit({ type: "permission", tool: name, decision: "deny", sensitive: false, reason: routingDenial });
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: routingDenial } };
+  }
   const sensitive = classifySensitivity(name, toolInput);
   if (GATE_MODE === "same-as-terminal") {
     emit({ type: "permission", tool: name, decision: "allow", sensitive });
@@ -450,6 +495,7 @@ function baseOptions() {
     // the same live line as the terminal's. Small cost: it reuses the subagent's own cache.
     agentProgressSummaries: true,
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
+    agents: { [CODE_REVIEWER_AGENT_TYPE]: CODE_REVIEWER_AGENT },
     // AskUserQuestion always lands here (every permission mode) — the chat's question card.
     canUseTool,
   };
