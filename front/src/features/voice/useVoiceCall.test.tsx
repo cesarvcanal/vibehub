@@ -193,7 +193,7 @@ describe("useVoiceCall — turns into the chat", () => {
 });
 
 describe("useVoiceCall — dropped connection", () => {
-  it("a queda da chamada vai ao servidor com o retrato da conexão, a rede e a aba", async () => {
+  it("a drop goes to the server with the connection's picture, the network and the tab", async () => {
     const { result } = setup();
     await goLive(result);
     act(() => rig.peer().fail());
@@ -202,7 +202,7 @@ describe("useVoiceCall — dropped connection", () => {
     expect(drops[0]![1]).toMatchObject({ cause: "peer_failed", sessionId: "live_1", peer: "failed", online: navigator.onLine, hidden: document.visibilityState === "hidden" });
   });
 
-  it("a chamada que reconecta segura o áudio da chamada em vez de devolvê-lo", async () => {
+  it("a call that reconnects keeps its audio instead of giving it back", async () => {
     const { result } = setup();
     await goLive(result);
     act(() => rig.peer().fail());
@@ -210,7 +210,7 @@ describe("useVoiceCall — dropped connection", () => {
     expect(audio.closed).toBe(false);
   });
 
-  it("o registro da queda que falha não derruba nem interrompe a reconexão", async () => {
+  it("a drop report that fails to send neither breaks nor delays the reconnect", async () => {
     mockPost.mockImplementation((url: string) => (url.endsWith("/voice/drops") ? Promise.reject(new Error("offline")) : Promise.resolve({ saved: [], duplicate: [] })));
     const { result } = setup();
     await goLive(result);
@@ -220,6 +220,40 @@ describe("useVoiceCall — dropped connection", () => {
     });
     expect(rig.exchanges).toHaveLength(2);
     expect(result.current.snap.state).toBe("connecting");
+  });
+
+  it("a drop report sent while offline goes again once the call is back", async () => {
+    const dropPosts: unknown[] = [];
+    mockPost.mockImplementation((url: string, body: unknown) => {
+      if (!url.endsWith("/voice/drops")) return Promise.resolve({ saved: [], duplicate: [] });
+      dropPosts.push(body);
+      return dropPosts.length === 1 ? Promise.reject(new Error("Network Error")) : Promise.resolve(undefined);
+    });
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    });
+    expect(dropPosts).toHaveLength(1);
+    await act(async () => {
+      rig.peer().channel!.emit({ type: "session.started", session: { id: "live_2" } });
+    });
+    expect(dropPosts).toHaveLength(2);
+    expect(dropPosts[1]).toEqual(dropPosts[0]);
+  });
+
+  it("a drop report already delivered is not sent again when the call comes back", async () => {
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    });
+    await act(async () => {
+      rig.peer().channel!.emit({ type: "session.started", session: { id: "live_2" } });
+    });
+    expect(mockPost.mock.calls.filter(([url]) => url === "/cards/card-1/voice/drops")).toHaveLength(1);
   });
 });
 
