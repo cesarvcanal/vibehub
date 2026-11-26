@@ -75,6 +75,7 @@ Every value placed in the line is validated (paths, card id, session id, URLs) a
 - `includePartialMessages: true` (live deltas), `thinking: { type: "adaptive", display:
   "summarized" }` (on current models the default display is `omitted`, and thinking blocks arrive
   with empty text), `agentProgressSummaries: true` (a per-subagent "what it is doing now" line);
+- `agents: { "code-reviewer": … }`: the Code Review subagent profile (see "Code review routing");
 - `model` and `effort` when the card pins them. No `allowedTools`.
 
 ### One driver per card
@@ -378,6 +379,30 @@ silences because `canUseTool` only serves questions here). vibehub writes no all
 `runnerSettingsJson` sets only `permissions.defaultMode: "bypassPermissions"`, and the driver passes
 no `allowedTools`. A repository's own committed `.claude/settings.json` may still carry allow
 rules; that is the project's choice.
+
+### Code review routing
+
+Claude Code ships no code review subagent type: the built-in `code-review` skill forks into a
+`general-purpose` subagent, and review skills that dispatch reviewers (such as
+`mattpocock-skills:code-review`) name no type, so the model picks `general-purpose`. The driver
+registers its own profile, `code-reviewer` (`CODE_REVIEWER_AGENT`): read-only (no `Edit`, `Write`,
+`NotebookEdit` or `Agent`), the project's `CLAUDE.md` and `AGENTS.md` as the review standard, and a
+report that opens with a `## Aderência` table (each instruction and skill considered, its status,
+and the command or `file:line` that proves it; no evidence means `não verificado`).
+
+Before the permission gate, in both modes, `reviewRoutingDenial` denies:
+
+- an `Agent`/`Task` call whose `subagent_type` is `general-purpose`, `claude` or absent and whose
+  description mentions a review (or whose prompt says "code review"), telling the model to dispatch
+  the same description and prompt with `subagent_type: "code-reviewer"`;
+- a `Skill` call for the built-in `code-review`, telling the model to pass its args to
+  `code-reviewer` instead.
+
+Specialised types (`Explore`, `feature-dev:code-reviewer`, a project's own agents) pass untouched.
+When the session's `init` does not list `code-reviewer`, the same calls are denied with a message
+that tells the model to report to the person that Code Review is unavailable, never to fall back to
+`general-purpose`. Each denial is also emitted as `permission { decision: "deny", sensitive: false,
+reason }`. The Terminal tab's TUI session does not run this hook.
 
 ## Questions (AskUserQuestion)
 
