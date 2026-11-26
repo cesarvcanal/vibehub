@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 interface ReviewRouting {
   CODE_REVIEWER_AGENT_TYPE: string;
   CODE_REVIEWER_AGENT: { description: string; prompt: string; disallowedTools: string[] };
-  reviewRoutingDenial: (toolName: string, input: unknown, availableAgentTypes: unknown) => string | null;
+  reviewRoutingDenial: (toolName: string, input: unknown, availableAgentTypes: unknown, callerAgentType?: string) => string | null;
 }
 
 function loadReviewRouting(): ReviewRouting {
@@ -23,15 +23,21 @@ const SESSION_AGENTS = ["general-purpose", "claude", "Explore", CODE_REVIEWER_AG
 
 describe("driver — pedido de Code Review roda no perfil code-reviewer, nunca no general-purpose", () => {
   it.each([
-    ["general-purpose", { description: "Code review · padrões", prompt: "Revise a branch atual contra o AGENTS.md" }],
-    ["general-purpose", { description: "Review admissão + Space vínculo", prompt: "Code review READ-ONLY no repo" }],
-    ["claude", { description: "Revisão independente PR 656", prompt: "Revise o PR 656" }],
-    ["sem tipo", { description: "Code review do diff da branch", prompt: "Revise o diff" }],
-    ["general-purpose", { description: "Conferir a branch", prompt: "Faça um code review do diff origin/main...HEAD" }],
-  ])("caso real dos transcripts: despacho de revisão como %s é recusado e aponta o code-reviewer", (agentType, input) => {
-    const subagentType = agentType === "sem tipo" ? {} : { subagent_type: agentType };
-    const denial = reviewRoutingDenial("Agent", { ...input, ...subagentType }, SESSION_AGENTS);
-    expect(denial).toContain(`subagent_type "${CODE_REVIEWER_AGENT_TYPE}"`);
+    { subagent_type: "general-purpose", description: "Code review · padrões", prompt: "Revise a branch atual contra o AGENTS.md" },
+    { subagent_type: "general-purpose", description: "Review admissão + Space vínculo", prompt: "Code review READ-ONLY no repo" },
+    { subagent_type: "general-purpose", description: "Revisão independente PR 656", prompt: "Revise o PR 656" },
+    { subagent_type: "general-purpose", description: "Code review do diff da branch", prompt: "Revise o diff" },
+  ])("caso real dos transcripts: $description como general-purpose é recusado e aponta o code-reviewer", (input) => {
+    expect(reviewRoutingDenial("Agent", input, SESSION_AGENTS)).toContain(`subagent_type "${CODE_REVIEWER_AGENT_TYPE}"`);
+  });
+
+  it.each([
+    ["sem tipo, que o Claude Code roda como general-purpose", { description: "Code review · spec", prompt: "x" }],
+    ["claude, o tipo padrão do vibehub", { subagent_type: "claude", description: "Code review · spec", prompt: "x" }],
+    ["general-purpose com outro nome e o prompt do fechamento", { subagent_type: "general-purpose", description: "Verificação do diff", prompt: "Revise a branch atual contra o AGENTS.md da raiz do repositório." }],
+    ["general-purpose com o prompt pedindo code review", { subagent_type: "general-purpose", description: "Conferir a branch", prompt: "Faça um code review do diff origin/main...HEAD" }],
+  ])("revisão despachada %s também é recusada", (_scenario, input) => {
+    expect(reviewRoutingDenial("Agent", input, SESSION_AGENTS)).toContain(`subagent_type "${CODE_REVIEWER_AGENT_TYPE}"`);
   });
 
   it("a recusa manda reenviar o mesmo pedido, para a pessoa não ter de repeti-lo", () => {
@@ -46,9 +52,12 @@ describe("driver — pedido de Code Review roda no perfil code-reviewer, nunca n
 
   it.each([
     [{ subagent_type: "general-purpose", description: "Pesquisar a docs do SDK", prompt: "Ache a opção agents do query()" }],
+    [{ subagent_type: "general-purpose", description: "Aplicar correções da revisão", prompt: "Corrija os achados do code review do PR 12" }],
+    [{ subagent_type: "general-purpose", description: "Corrigir achados do code review", prompt: "Aplique os ajustes" }],
+    [{ subagent_type: "general-purpose", description: "Fix review findings", prompt: "Apply the code review fixes" }],
     [{ subagent_type: "Explore", description: "Review dos imports antigos", prompt: "Ache quem importa X" }],
     [{ subagent_type: "feature-dev:code-reviewer", description: "Code review", prompt: "Revise" }],
-  ])("despacho que não é revisão, ou já vai a um perfil especializado, passa: %o", (input) => {
+  ])("despacho que não é revisão (pesquisa, correção dos achados) ou já vai a um perfil especializado passa: %o", (input) => {
     expect(reviewRoutingDenial("Agent", input, SESSION_AGENTS)).toBeNull();
   });
 
@@ -56,6 +65,12 @@ describe("driver — pedido de Code Review roda no perfil code-reviewer, nunca n
     const denial = reviewRoutingDenial("Skill", { skill: "code-review", args: "high origin/dev...HEAD" }, SESSION_AGENTS);
     expect(denial).toContain(`subagent_type "${CODE_REVIEWER_AGENT_TYPE}"`);
     expect(denial).toMatch(/args/);
+  });
+
+  it("o próprio code-reviewer que chama a skill embutida é mandado revisar ali mesmo, sem despachar agente que ele não tem", () => {
+    const denial = reviewRoutingDenial("Skill", { skill: "code-review" }, SESSION_AGENTS, CODE_REVIEWER_AGENT_TYPE);
+    expect(denial).toMatch(/yourself/i);
+    expect(denial).not.toMatch(/Dispatch the Agent tool/);
   });
 
   it("as skills de revisão que orquestram os revisores (Matt Pocock, plugin de PR) passam", () => {
@@ -79,7 +94,7 @@ describe("driver — pedido de Code Review roda no perfil code-reviewer, nunca n
 });
 
 describe("driver — o perfil code-reviewer segue as instruções do projeto e mostra a aderência", () => {
-  it("só lê: não edita arquivo nem despacha outro agente", () => {
+  it("não tem ferramenta de edição nem despacha outro agente", () => {
     expect(CODE_REVIEWER_AGENT.disallowedTools).toEqual(expect.arrayContaining(["Edit", "Write", "NotebookEdit", "Agent"]));
   });
 
@@ -88,7 +103,8 @@ describe("driver — o perfil code-reviewer segue as instruções do projeto e m
     expect(CODE_REVIEWER_AGENT.prompt).toMatch(/AGENTS\.md/);
   });
 
-  it("o relatório abre com a seção de aderência, e item sem evidência sai como não verificado", () => {
+  it("o relatório diz o perfil e abre com a seção de aderência, e item sem evidência sai como não verificado", () => {
+    expect(CODE_REVIEWER_AGENT.prompt).toContain("Perfil: code-reviewer");
     expect(CODE_REVIEWER_AGENT.prompt).toContain("## Aderência");
     expect(CODE_REVIEWER_AGENT.prompt).toMatch(/não verificado/);
   });

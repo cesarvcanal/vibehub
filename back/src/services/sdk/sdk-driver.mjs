@@ -349,8 +349,9 @@ async function canUseTool(toolName, input) {
 const CODE_REVIEWER_AGENT_TYPE = "code-reviewer";
 const GENERIC_AGENT_TYPES = new Set(["general-purpose", "claude"]);
 const REVIEW_DESCRIPTION = /code[\s-]?review|\breview|\brevis/i;
-const REVIEW_PROMPT = /code[\s-]?review/i;
-const GENERAL_PURPOSE_REVIEW_SKILL = "code-review";
+const REVIEW_PROMPT = /code[\s-]?review|\brevise (a|o) (branch|diff|pr)\b/i;
+const FIX_DESCRIPTION = /\b(corrig|aplic|apply|fix|implement)/i;
+const BUILTIN_REVIEW_SKILL = "code-review";
 const CODE_REVIEWER_AGENT = {
   description: "Code Review: reviews a change (diff, branch or PR) against the project's own rules and reports findings with evidence. Use it for every code review, never general-purpose.",
   disallowedTools: ["Edit", "Write", "NotebookEdit", "Agent"],
@@ -361,26 +362,31 @@ const CODE_REVIEWER_AGENT = {
     "",
     "Method: read the diff and what calls or consumes the changed code; for each finding give file:line, the concrete scenario that fails, the rule or the evidence that proves it, and the severity in the project's terms. Separate fact from hypothesis and say what you did not verify.",
     "",
-    "Report, in the language of the dispatcher's request. It OPENS with the section `## Aderência`: a table with one row per instruction (file and section) and per skill you considered, with columns item, status and evidence. Status is `seguido`, `não seguido` or `não se aplica`; the evidence is the command you ran with its result, or the file:line you read. A row whose evidence you cannot show is `não verificado`, never `seguido`. Every item the dispatcher asked for that you did not do is listed with the reason. The findings come after that section.",
+    "Report, in the language of the dispatcher's request. Its first line is `Perfil: code-reviewer (Code Review do vibehub)`. Then it OPENS with the section `## Aderência`: a table with one row per instruction (file and section) and per skill you considered, with columns item, status and evidence. Status is `seguido`, `não seguido` or `não se aplica`; the evidence is the command you ran with its result, or the file:line you read. A row whose evidence you cannot show is `não verificado`, never `seguido`. Every item the dispatcher asked for that you did not do is listed with the reason. The findings come after that section.",
   ].join("\n"),
 };
 
 function isReviewDispatch(toolInput) {
-  return REVIEW_DESCRIPTION.test(String(toolInput.description ?? "")) || REVIEW_PROMPT.test(String(toolInput.prompt ?? ""));
+  const description = String(toolInput.description ?? "");
+  if (FIX_DESCRIPTION.test(description)) return false;
+  return REVIEW_DESCRIPTION.test(description) || REVIEW_PROMPT.test(String(toolInput.prompt ?? ""));
 }
 
-function reviewRoutingDenial(toolName, toolInput, availableAgentTypes) {
-  const forkedReviewSkill = toolName === "Skill"
-    && String(toolInput.skill ?? "").replace(/^\//, "") === GENERAL_PURPOSE_REVIEW_SKILL;
-  const genericReviewDispatch = (toolName === "Agent" || toolName === "Task")
+function reviewRoutingDenial(toolName, toolInput, availableAgentTypes, callerAgentType) {
+  const builtinReviewSkill = toolName === "Skill"
+    && String(toolInput.skill ?? "").replace(/^\//, "") === BUILTIN_REVIEW_SKILL;
+  const genericReviewDispatch = toolName === "Agent"
     && GENERIC_AGENT_TYPES.has(toolInput.subagent_type ?? "general-purpose")
     && isReviewDispatch(toolInput);
-  if (!forkedReviewSkill && !genericReviewDispatch) return null;
+  if (!builtinReviewSkill && !genericReviewDispatch) return null;
+  if (builtinReviewSkill && callerAgentType === CODE_REVIEWER_AGENT_TYPE) {
+    return "Blocked by vibehub: the built-in code-review skill would fork into a general-purpose subagent. You are the Code Review profile: do the review yourself, in this context, with your own method.";
+  }
   const reviewerAvailable = Array.isArray(availableAgentTypes) && availableAgentTypes.includes(CODE_REVIEWER_AGENT_TYPE);
   if (!reviewerAvailable) {
     return `Blocked by vibehub: this is a code review, and the Code Review profile (subagent_type "${CODE_REVIEWER_AGENT_TYPE}") is not available in this session. Tell the person the review could not run as Code Review, and why; never run it as general-purpose, and never present another agent's result as a Code Review.`;
   }
-  const rerouteInstruction = forkedReviewSkill
+  const rerouteInstruction = builtinReviewSkill
     ? `The built-in code-review skill runs in a general-purpose subagent. Dispatch the Agent tool with subagent_type "${CODE_REVIEWER_AGENT_TYPE}" instead, with this skill's args as the request, verbatim.`
     : `Dispatch it again with subagent_type "${CODE_REVIEWER_AGENT_TYPE}", the same description and the same prompt.`;
   return `Blocked by vibehub: code reviews run in the Code Review profile, never in general-purpose. ${rerouteInstruction} If the project's CLAUDE.md maps a skill to code review and you have not invoked it this turn, invoke it first. Tell the person which profile ran the review.`;
@@ -393,7 +399,7 @@ function reviewRoutingDenial(toolName, toolInput, availableAgentTypes) {
 async function preToolUse(input) {
   const name = input.tool_name;
   const toolInput = input.tool_input ?? {};
-  const routingDenial = reviewRoutingDenial(name, toolInput, lastInit?.agents);
+  const routingDenial = reviewRoutingDenial(name, toolInput, lastInit?.agents, input.agent_type);
   if (routingDenial) {
     emit({ type: "permission", tool: name, decision: "deny", sensitive: false, reason: routingDenial });
     return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: routingDenial } };
