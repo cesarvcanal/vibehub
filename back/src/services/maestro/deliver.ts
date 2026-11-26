@@ -498,15 +498,6 @@ export function buildMergeScript(
   return dockerBashScript(containerName, body);
 }
 
-/**
- * Sets `WF=1` when some workflow runs on a pull request or a push — the only ones that put checks on a
- * PR — in the pushed commit (`HEAD`) or in the tip of the PR's base (`$BASE`, fetched here). A repo
- * whose workflows are all scheduled or manual (tech.multi, PR #215: an hourly port scan) would
- * otherwise make every delivery wait `CI_APPEAR_SECONDS` for checks that never come. A base that
- * cannot be fetched leaves `WF=1`: the wait is bounded, a false `no_ci` is not. Matches `on: push`,
- * `on: [push, pull_request]`, an `on:` map or list with `push`/`pull_request`/`pull_request_target`,
- * quoted `"on":` included. PURE (a constant).
- */
 export const PR_WORKFLOWS_DETECT = [
   `WF=1`,
   `if git fetch -q origin "refs/heads/$BASE" >/dev/null 2>&1; then`,
