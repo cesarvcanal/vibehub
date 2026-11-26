@@ -455,6 +455,65 @@ describe("POST /api/cards/:id/voice/actions", () => {
   });
 });
 
+const DROP = {
+  cause: "peer_failed", sessionId: "live_9", liveForMs: 90_000, peer: "failed", ice: "disconnected", channel: "open",
+  iceDisconnectedForMs: 30_000, sentBytes: 5_000, receivedBytes: 9_000, lastInputAgoMs: 90_000, lastOutputAgoMs: null,
+  online: true, hidden: false,
+};
+
+function reportDrop(cardId: string, body: unknown, cookie = owner) {
+  return app.inject({ method: "POST", url: `/api/cards/${cardId}/voice/drops`, headers: { cookie }, payload: body as Record<string, unknown> });
+}
+
+async function captureWarnings() {
+  const { onLogLine } = await import("../utils/logger.js");
+  const lines: import("../utils/logger.js").LogLine[] = [];
+  onTestFinished(onLogLine("warn", (line) => lines.push(line)));
+  return lines;
+}
+
+describe("POST /api/cards/:id/voice/drops", () => {
+  it("a queda da chamada vira uma linha no log do servidor com o retrato da conexão, quem e qual card", async () => {
+    const lines = await captureWarnings();
+    const id = await makeCard();
+    const res = await reportDrop(id, DROP);
+    expect(res.statusCode).toBe(204);
+    const drops = lines.filter((line) => line.fields.action === "voice.drop");
+    expect(drops).toHaveLength(1);
+    expect(drops[0]!.fields).toMatchObject({ ...DROP, card: id, by: "owner" });
+  });
+
+  it("a queda registrada não vira falha da plataforma: é a rede de quem fala", async () => {
+    const lines = await captureWarnings();
+    const { isPlatformFailureLogLine } = await import("../services/platformFailures/backendError.js");
+    const id = await makeCard();
+    await reportDrop(id, DROP);
+    expect(lines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()))).toEqual([]);
+  });
+
+  it.each([
+    ["causa desconhecida", { ...DROP, cause: "boom" }],
+    ["estado de conexão inventado", { ...DROP, peer: "exploded" }],
+    ["número negativo", { ...DROP, liveForMs: -1 }],
+    ["campo obrigatório ausente", { ...DROP, online: undefined }],
+    ["id de sessão gigante", { ...DROP, sessionId: "x".repeat(201) }],
+  ])("corpo inválido (%s) responde 400 { error } sem registrar", async (_case, body) => {
+    const lines = await captureWarnings();
+    const id = await makeCard();
+    const res = await reportDrop(id, body);
+    expect(res.statusCode).toBe(400);
+    expect(typeof res.json().error).toBe("string");
+    expect(lines.filter((line) => line.fields.action === "voice.drop")).toEqual([]);
+  });
+
+  it("sem sessão responde 401, card desconhecido 404, compartilhamento view 403", async () => {
+    const id = await makeCard();
+    expect((await reportDrop(id, DROP, "")).statusCode).toBe(401);
+    expect((await reportDrop("ghost", DROP)).statusCode).toBe(404);
+    expect((await reportDrop(id, DROP, await memberWith(id, "view"))).statusCode).toBe(403);
+  });
+});
+
 describe("formatVoiceContext", () => {
   it("keeps the newest lines inside the budget and clips a long answer", async () => {
     const { formatVoiceContext, CONTEXT_ITEM_MAX_CHARS } = await import("../services/voice/context.js");
