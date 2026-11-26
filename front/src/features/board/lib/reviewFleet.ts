@@ -7,6 +7,7 @@ export type AgentReading =
   | { kind: "text"; text: string };
 
 const JUDGE_LABEL = "juiz";
+const CONSOLIDATION_LABEL = "consolidação";
 export const LABEL_SEPARATOR = " · ";
 const JSON_STRING = String.raw`"((?:[^"\\]|\\.)*)`;
 const TITLE_PATTERN = new RegExp(String.raw`"title"\s*:\s*${JSON_STRING}"`, "g");
@@ -73,6 +74,7 @@ export function readAgentResult(raw: string): AgentReading {
 
 export type AgentRole =
   | { kind: "context" }
+  | { kind: "consolidation" }
   | { kind: "review"; dimension: AnalysisDimension }
   | { kind: "verification"; dimension: AnalysisDimension }
   | { kind: "judge" }
@@ -87,6 +89,7 @@ function asDimension(text: string): AnalysisDimension | undefined {
 export function agentRole(label: string): AgentRole {
   if (label === "contexto") return { kind: "context" };
   if (label === JUDGE_LABEL) return { kind: "judge" };
+  if (label === CONSOLIDATION_LABEL) return { kind: "consolidation" };
   for (const [prefix, kind] of ROLE_PREFIXES) {
     if (!label.startsWith(prefix)) continue;
     const dimension = asDimension(label.slice(prefix.length).split(LABEL_SEPARATOR)[0]!.trim());

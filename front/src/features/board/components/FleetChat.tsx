@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertCircle, BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
+import { AlertCircle, BookCheck, Bot, Braces, Bug, ChevronRight, Combine, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
 import { ANALYSIS_DIMENSIONS, type AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
@@ -16,12 +16,13 @@ const ENTRY_TEST_ID: Record<FleetChatEntry["kind"], string> = {
   stopped: "fleet-chat-stopped",
 };
 
-type AgentTone = AnalysisDimension | "context" | "judge" | "other";
+type AgentTone = AnalysisDimension | "context" | "consolidation" | "judge" | "other";
 
 const MESSAGE_ARRIVAL = "origin-bottom-left animate-message-arrival motion-reduce:animate-none";
 
 const TONE_STYLE: Record<AgentTone, { icon: LucideIcon; solid: string; outline: string; name: string }> = {
   context: { icon: Telescope, solid: "bg-teal-400", outline: "border-teal-400 text-teal-300", name: "text-teal-300" },
+  consolidation: { icon: Combine, solid: "bg-cyan-400", outline: "border-cyan-400 text-cyan-300", name: "text-cyan-300" },
   judge: { icon: Scale, solid: "bg-amber-400", outline: "border-amber-400 text-amber-300", name: "text-amber-300" },
   correctness: { icon: Bug, solid: "bg-sky-400", outline: "border-sky-400 text-sky-300", name: "text-sky-300" },
   security: { icon: ShieldCheck, solid: "bg-rose-400", outline: "border-rose-400 text-rose-300", name: "text-rose-300" },
@@ -38,6 +39,7 @@ function agentTone(role: AgentRole): AgentTone {
     case "verification":
       return role.dimension;
     case "context":
+    case "consolidation":
     case "judge":
     case "other":
       return role.kind;
@@ -349,6 +351,8 @@ function fleetAgentName(label: string, t: Translate): string {
   switch (role.kind) {
     case "context":
       return t("review.fleet.agent.context");
+    case "consolidation":
+      return t("review.fleet.agent.consolidation");
     case "judge":
       return t("review.fleet.agent.judge");
     case "review":
