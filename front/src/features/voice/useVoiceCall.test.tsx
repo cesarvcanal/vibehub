@@ -243,6 +243,27 @@ describe("useVoiceCall — dropped connection", () => {
     expect(dropPosts[1]).toEqual(dropPosts[0]);
   });
 
+  it("a drop report that failed goes again when the person ends the call while it reconnects", async () => {
+    const dropPosts: unknown[] = [];
+    mockPost.mockImplementation((url: string, body: unknown) => {
+      if (!url.endsWith("/voice/drops")) return Promise.resolve({ saved: [], duplicate: [] });
+      dropPosts.push(body);
+      return dropPosts.length === 1 ? Promise.reject(new Error("Network Error")) : Promise.resolve(undefined);
+    });
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(dropPosts).toHaveLength(1);
+    await act(async () => {
+      result.current.stop();
+    });
+    expect(result.current.snap.state).toBe("idle");
+    expect(dropPosts).toHaveLength(2);
+  });
+
   it("a drop report already delivered is not sent again when the call comes back", async () => {
     const { result } = setup();
     await goLive(result);

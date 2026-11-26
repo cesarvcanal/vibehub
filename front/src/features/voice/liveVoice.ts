@@ -107,7 +107,9 @@ export const ICE_TIMEOUT_MS = 10_000;
 export const START_TIMEOUT_MS = 20_000;
 /** How long `stop` waits for `session.closed` (pending work drains) before tearing down anyway. */
 export const CLOSE_TIMEOUT_MS = 15_000;
-export const RECONNECT_DELAYS_MS: readonly number[] = [2_000, 8_000];
+export const RECONNECT_DELAYS_MS: readonly number[] = [1_000, 3_000, 5_000, 10_000, 15_000];
+export const RECONNECT_STEADY_DELAY_MS = 30_000;
+export const UNCONFIRMED_SESSIONS_MAX = 3;
 const RECONNECTING_NOTICE = "voice.notice.reconnecting";
 
 interface CallCarryOver {
@@ -145,6 +147,7 @@ export class LiveVoiceSession {
   private earlierTurns: VoiceTurn[] = [];
   private iceDisconnectedAt: number | null = null;
   private reconnectTries = 0;
+  private unconfirmedSessions = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
@@ -238,6 +241,7 @@ export class LiveVoiceSession {
   async start(): Promise<void> {
     if (this.snap.state !== "idle" && this.snap.state !== "error") return;
     this.reconnectTries = 0;
+    this.unconfirmedSessions = 0;
     await this.connect({ notice: null, earlierTurns: [], muted: false });
   }
 
@@ -270,7 +274,7 @@ export class LiveVoiceSession {
       for (const track of mic.getAudioTracks()) track.enabled = !muted;
       // Bounded from the grant on: the time a person spends on the browser's permission prompt is
       // theirs (and "end call" still cancels it), the network handshake after it is not.
-      this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
+      this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout", true), START_TIMEOUT_MS);
       const micTrack = mic.getAudioTracks()[0];
       this.setDiag({ micTrack: micTrack ? micTrack.readyState : null });
       micTrack?.addEventListener?.("ended", () => {
@@ -338,7 +342,7 @@ export class LiveVoiceSession {
       // `session.start` here.
     } catch (err) {
       if (err instanceof Cancelled || abort.signal.aborted) return;
-      this.fail(attempt, errorMessage(err));
+      this.fail(attempt, errorMessage(err), isNetworkFailure(err));
     }
   }
 
@@ -423,6 +427,7 @@ export class LiveVoiceSession {
         this.clearStartTimer();
         this.liveSince = Date.now();
         this.reconnectTries = 0;
+        this.unconfirmedSessions = 0;
         if (this.snap.state === "connecting") {
           this.set({ state: "live", notice: this.snap.notice === RECONNECTING_NOTICE ? null : this.snap.notice });
         }
@@ -476,7 +481,7 @@ export class LiveVoiceSession {
         this.setDiag({ lastErrorCode: typeof code === "string" ? code.slice(0, 80) : "error" });
         // A startup error means `session.started` never comes; after that, an error (a refused
         // command, moderation cutting a reply) does not end the session.
-        if (this.snap.state === "connecting") this.fail(attempt, message);
+        if (this.snap.state === "connecting") this.fail(attempt, message, false);
         else this.set({ notice: message });
         break;
       }
@@ -539,13 +544,13 @@ export class LiveVoiceSession {
   private recoverFromDrop(attempt: number, cause: VoiceDropCause): void {
     if (attempt !== this.attempt) return;
     if (this.snap.state !== "live") {
-      this.fail(attempt, dropErrorKey(cause));
+      this.fail(attempt, dropErrorKey(cause), true);
       return;
     }
     const report = this.buildDropReport(cause, Date.now());
     this.teardown();
     for (const listener of this.dropListeners) listener(report);
-    this.scheduleReconnect(dropErrorKey(cause));
+    this.scheduleReconnect();
   }
 
   private buildDropReport(cause: VoiceDropCause, now: number): VoiceDropReport {
@@ -567,12 +572,8 @@ export class LiveVoiceSession {
     };
   }
 
-  private scheduleReconnect(failure: string): void {
-    const delay = RECONNECT_DELAYS_MS[this.reconnectTries];
-    if (delay === undefined) {
-      this.set({ state: "error", error: failure, notice: null });
-      return;
-    }
+  private scheduleReconnect(): void {
+    const delay = RECONNECT_DELAYS_MS[this.reconnectTries] ?? RECONNECT_STEADY_DELAY_MS;
     this.reconnectTries += 1;
     this.set({ state: "connecting", error: null, notice: RECONNECTING_NOTICE });
     this.reconnectTimer = setTimeout(() => {
@@ -589,11 +590,18 @@ export class LiveVoiceSession {
     this.publishTurns(closed);
   }
 
-  private fail(attempt: number, message: string): void {
+  private fail(attempt: number, message: string, retryable: boolean): void {
     if (attempt !== this.attempt) return;
+    const sessionWasCreated = this.sessionId !== null;
     this.teardown();
-    if (this.reconnectTries > 0) this.scheduleReconnect(message);
-    else this.set({ state: "error", error: message });
+    if (this.reconnectTries === 0) {
+      this.set({ state: "error", error: message });
+      return;
+    }
+    if (sessionWasCreated) this.unconfirmedSessions += 1;
+    const keepReconnecting = retryable && this.unconfirmedSessions < UNCONFIRMED_SESSIONS_MAX;
+    if (keepReconnecting) this.scheduleReconnect();
+    else this.set({ state: "error", error: message, notice: null });
   }
 
   private clearStartTimer(): void {
@@ -683,6 +691,13 @@ function closedNotice(reason: unknown): string | null {
     default:
       return null;
   }
+}
+
+function isNetworkFailure(err: unknown): boolean {
+  const serverAnswered = (err as { response?: unknown })?.response !== undefined;
+  const name = (err as { name?: unknown })?.name;
+  const microphoneRefused = name === "NotAllowedError" || name === "NotFoundError";
+  return !serverAnswered && !microphoneRefused;
 }
 
 /** What the person reads: the back-end's `{ error }` when there is one, the browser's otherwise. */
