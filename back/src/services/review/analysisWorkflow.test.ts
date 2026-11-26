@@ -88,16 +88,18 @@ describe("frota da análise de PR", () => {
     expect(judgedFinding.proof.properties.kind.enum).toEqual([...toolProof.kind.options]);
   });
 
-  it("só o juiz roda em Opus, com esforço alto; contexto, revisão e verificação em Sonnet, e o contexto com esforço médio", async () => {
+  it("consolidação e juiz rodam em Opus, com esforço alto; contexto, revisão e verificação em Sonnet, e o contexto com esforço médio", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ALL_APPLY);
       if (opts.phase === "Revisão") return { findings: [scenarioFinding("bug")] };
+      if (opts.phase === "Consolidação") return null;
       if (opts.phase === "Verificação") return { confirmed: true, evidence: "reproduzido" };
       return { findings: [{ ...scenarioFinding("bug"), dimension: "correctness", severity: "blocking" }] };
     });
     const settingsOf = (phase: string) => new Set(calls.filter((call) => call.opts.phase === phase).map((call) => `${call.opts.model}/${call.opts.effort}`));
     expect(settingsOf("Contexto")).toEqual(new Set(["sonnet/medium"]));
     expect(settingsOf("Revisão")).toEqual(new Set(["sonnet/high"]));
+    expect(settingsOf("Consolidação")).toEqual(new Set(["opus/high"]));
     expect(settingsOf("Verificação")).toEqual(new Set(["sonnet/high"]));
     expect(settingsOf("Julgamento")).toEqual(new Set(["opus/high"]));
   });
@@ -394,6 +396,120 @@ describe("frota da análise de PR", () => {
       return null;
     }, fleetArgs)).rejects.toThrow(/args/);
     expect(agentCalls).toEqual([]);
+  });
+
+  describe("consolidação dos achados antes da verificação", () => {
+    const lockedPackaging = (dimension: string, line: number) => ({
+      ...scenarioFinding(`embalagem travada só na tela (visto por ${dimension})`),
+      file: "service.js", line, proof: { kind: "scenario", ref: `service.js:${line}`, detail: `cenário de ${dimension}` },
+    });
+    const sameLineDistinct = [
+      { ...scenarioFinding("histórico conta entrada estornada"), file: "service.js", line: 880 },
+      { ...scenarioFinding("histórico perdeu as pernas de transferência"), file: "service.js", line: 880 },
+    ];
+    const reviewByDimension: Record<string, object[]> = {
+      "revisão: correctness": [lockedPackaging("correctness", 2090), sameLineDistinct[0]!],
+      "revisão: security": [lockedPackaging("security", 2060)],
+      "revisão: tests": [sameLineDistinct[1]!],
+    };
+    const threeDimensions = { ...ONLY_CORRECTNESS, security: true, tests: true };
+    const groupsOf = (groups: { title: string; members: string[] }[]) => ({ findings: groups });
+    const fleetWithConsolidation = (consolidation: unknown, verdictFor: (prompt: string) => object = () => ({ confirmed: true, evidence: "- conferido" })) =>
+      runFleet(async (prompt, opts) => {
+        if (opts.phase === "Contexto") return brief(threeDimensions);
+        if (opts.phase === "Revisão") return { findings: reviewByDimension[opts.label!] ?? [] };
+        if (opts.phase === "Consolidação") return consolidation;
+        if (opts.phase === "Verificação") return verdictFor(prompt);
+        return { findings: [] };
+      });
+    const callsIn = (calls: { prompt: string; opts: AgentOpts }[], phase: string) => calls.filter((call) => call.opts.phase === phase);
+
+    it("a consolidação roda uma vez, depois de todas as revisões, com cada achado de cada dimensão identificado", async () => {
+      const { calls } = await fleetWithConsolidation(groupsOf([
+        { title: "a", members: ["c1"] }, { title: "b", members: ["c2"] }, { title: "c", members: ["c3"] }, { title: "d", members: ["c4"] },
+      ]));
+      const consolidationCalls = callsIn(calls, "Consolidação");
+      expect(consolidationCalls).toHaveLength(1);
+      const consolidationIndex = calls.indexOf(consolidationCalls[0]!);
+      expect(calls.slice(consolidationIndex).some((call) => call.opts.phase === "Revisão")).toBe(false);
+      for (const id of ["c1", "c2", "c3", "c4"]) expect(consolidationCalls[0]!.prompt).toContain(`${id} [revisão: `);
+      expect(consolidationCalls[0]!.prompt).toContain("embalagem travada só na tela (visto por security)");
+      expect(consolidationCalls[0]!.prompt).toContain("histórico perdeu as pernas de transferência");
+    });
+
+    it("o mesmo defeito visto por duas dimensões, em linhas diferentes, é verificado uma vez só, com o achado de cada revisor no pedido", async () => {
+      const { calls } = await fleetWithConsolidation(groupsOf([
+        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
+        { title: "histórico conta entrada estornada", members: ["c2"] },
+        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
+      ]));
+      const verifications = callsIn(calls, "Verificação");
+      expect(verifications).toHaveLength(3);
+      const packagingVerification = verifications.find((call) => call.opts.label === "verificação: correctness · embalagem e fator travados só na tela")!;
+      expect(packagingVerification.prompt).toContain("cenário de correctness");
+      expect(packagingVerification.prompt).toContain("cenário de security");
+      expect(packagingVerification.prompt).toContain("service.js:2090");
+      expect(packagingVerification.prompt).toContain("service.js:2060");
+    });
+
+    it("achados parecidos mas distintos, no mesmo arquivo e linha, que a consolidação separa, são verificados cada um", async () => {
+      const { calls } = await fleetWithConsolidation(groupsOf([
+        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
+        { title: "histórico conta entrada estornada", members: ["c2"] },
+        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
+      ]));
+      const historyVerifications = callsIn(calls, "Verificação").filter((call) => call.opts.label!.includes("histórico"));
+      expect(historyVerifications.map((call) => call.opts.label)).toEqual([
+        "verificação: correctness · histórico conta entrada estornada",
+        "verificação: tests · histórico perdeu as pernas de transferência",
+      ]);
+      expect(historyVerifications[0]!.prompt).not.toContain("pernas de transferência");
+    });
+
+    it("o juiz recebe o grupo confirmado como um achado, com o achado de cada revisor e a evidência da verificação", async () => {
+      const { calls } = await fleetWithConsolidation(groupsOf([
+        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
+        { title: "histórico conta entrada estornada", members: ["c2"] },
+        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
+      ]), (prompt) => ({ confirmed: prompt.includes("embalagem"), evidence: "- a linha 2060 só confere o produto" }));
+      const judgePrompt = callsIn(calls, "Julgamento")[0]!.prompt;
+      const confirmedList = judgePrompt.split("Achados confirmados pela verificação, de todas as dimensões:\n")[1]!.split("\nJunte os repetidos")[0]!;
+      expect(confirmedList.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
+      expect(confirmedList).toContain("embalagem e fator travados só na tela");
+      expect(confirmedList).toContain("[revisão: correctness]");
+      expect(confirmedList).toContain("[revisão: security]");
+      expect(confirmedList).toContain("cenário de correctness");
+      expect(confirmedList).toContain("cenário de security");
+      expect(confirmedList).toContain("    - a linha 2060 só confere o produto");
+    });
+
+    it("grupo derrubado conta como um derrubado, e grupo sem veredito deixa cada achado dele como não verificado na sua dimensão", async () => {
+      const { fleetResult } = await fleetWithConsolidation(groupsOf([
+        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
+        { title: "histórico unificado", members: ["c2", "c4"] },
+      ]), (prompt) => (prompt.includes("embalagem") ? { confirmed: false, evidence: "- o servidor barra" } : null as unknown as object));
+      expect(fleetResult.refutedCount).toBe(1);
+      expect(fleetResult.dimensions).toContainEqual(expect.objectContaining({ key: "correctness", unverifiedCount: 1 }));
+      expect(fleetResult.dimensions).toContainEqual(expect.objectContaining({ key: "tests", unverifiedCount: 1 }));
+      expect(fleetResult.dimensions).toContainEqual({ key: "security", status: "ran" });
+    });
+
+    it.each([
+      ["não responde", null],
+      ["deixa um achado de fora", groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2"] }])],
+      ["põe um achado em dois grupos", groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2", "c3"] }, { title: "c", members: ["c4"] }])],
+      ["cita um achado que não existe", groupsOf([{ title: "a", members: ["c1", "c3", "c9"] }, { title: "b", members: ["c2"] }, { title: "c", members: ["c4"] }])],
+    ])("consolidação que %s não perde achado: cada um é verificado sozinho e o log diz o motivo", async (_case, consolidation) => {
+      const { calls, logs } = await fleetWithConsolidation(consolidation);
+      expect(callsIn(calls, "Verificação")).toHaveLength(4);
+      expect(logs.join("\n")).toMatch(/consolidação/);
+    });
+
+    it("com um achado só, não há o que consolidar e a consolidação não roda", async () => {
+      const { calls } = await runFleet(confirmOneFindingUpToJudge);
+      expect(callsIn(calls, "Consolidação")).toEqual([]);
+      expect(callsIn(calls, "Verificação")).toHaveLength(1);
+    });
   });
 
   it("contexto que não responde derruba a frota com erro", async () => {
