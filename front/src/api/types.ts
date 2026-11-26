@@ -332,8 +332,7 @@ export interface VoiceActionResult {
   output: unknown;
 }
 
-export const VOICE_DROP_CAUSES = ["peer_failed", "channel_closed"] as const;
-export type VoiceDropCause = (typeof VOICE_DROP_CAUSES)[number];
+export type VoiceDropCause = "peer_failed" | "channel_closed";
 
 export interface VoiceDropReport {
   cause: VoiceDropCause;

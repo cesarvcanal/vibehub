@@ -337,7 +337,6 @@ export class LiveVoiceSession {
   stop(): void {
     const { state } = this.snap;
     if (state === "connecting") {
-      this.reconnectTries = 0;
       this.teardown();
       this.set({ state: "idle", notice: null });
       return;
@@ -536,7 +535,6 @@ export class LiveVoiceSession {
     const report = this.dropReport(cause, Date.now());
     this.teardown();
     for (const listener of this.dropListeners) listener(report);
-    this.reconnectTries = 0;
     this.scheduleReconnect(dropMessage(cause));
   }
 
@@ -561,7 +559,6 @@ export class LiveVoiceSession {
   private scheduleReconnect(failure: string): void {
     const delay = RECONNECT_DELAYS_MS[this.reconnectTries];
     if (delay === undefined) {
-      this.reconnectTries = 0;
       this.set({ state: "error", error: failure, notice: null });
       return;
     }
