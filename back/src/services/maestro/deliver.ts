@@ -498,17 +498,15 @@ export function buildMergeScript(
   return dockerBashScript(containerName, body);
 }
 
-/**
- * Sets `WF=1` when some workflow of the worktree runs on a pull request or a push — the only ones that
- * put checks on a PR. A repo whose workflows are all scheduled or manual (tech.multi, PR #215: an
- * hourly port scan) would otherwise make every delivery wait `CI_APPEAR_SECONDS` for checks that
- * never come. Matches `on: push`, `on: [push, pull_request]`, an `on:` map or list with
- * `push`/`pull_request`/`pull_request_target`, quoted `"on":` included. PURE (a constant).
- */
-export const PR_WORKFLOWS_DETECT =
-  `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && ` +
-  `grep -Eq -e '^[[:space:]]*["]?on["]?[[:space:]]*:.*(push|pull_request)' ` +
-  `-e '^[[:space:]]*(-[[:space:]]*)?(push|pull_request|pull_request_target)[[:space:]]*:?[[:space:]]*$' "$f" && WF=1; done`;
+export const PR_WORKFLOWS_DETECT = [
+  `WF=1`,
+  `if git fetch -q origin "refs/heads/$BASE" >/dev/null 2>&1; then`,
+  // external: a pull_request workflow runs from the PR's merge commit, so the base's workflows count too (docs.github.com, "Events that trigger workflows", pull_request)
+  `  git grep -Eq -e '^[[:space:]]*["]?on["]?[[:space:]]*:.*(push|pull_request)' ` +
+    `-e '^[[:space:]]*(-[[:space:]]*)?(push|pull_request|pull_request_target)[[:space:]]*:?[[:space:]]*$' ` +
+    `HEAD FETCH_HEAD -- ':(glob).github/workflows/*.yml' ':(glob).github/workflows/*.yaml' || WF=0`,
+  `fi`,
+].join("\n");
 
 /**
  * Script for step (c) when the PR has CI: wait for the PR to point at the pushed commit, read `gh pr
@@ -530,6 +528,7 @@ export function buildCiChecksScript(
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${CI_MARKER} error"; exit 0; }`,
+    `BASE=$(gh pr view ${shQuote(prUrl)} --json baseRefName --jq .baseRefName 2>/dev/null)`,
     PR_WORKFLOWS_DETECT,
     headSha ? `HEAD=${shQuote(headSha)}` : `HEAD=$(git rev-parse HEAD)`,
     `i=0`,
