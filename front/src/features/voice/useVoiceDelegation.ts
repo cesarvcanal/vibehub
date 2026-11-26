@@ -42,6 +42,7 @@ export interface UseVoiceDelegationOptions {
 export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent, runAction, answerQuestion }: UseVoiceDelegationOptions): void {
   const { onToolCall, answerToolCall, appendContext, announceContext } = call;
   const live = call.snap.state === "live";
+  const callEnded = call.snap.state === "idle" || call.snap.state === "error";
   const sendRef = React.useRef(sendUrgentToAgent);
   sendRef.current = sendUrgentToAgent;
   const runActionRef = React.useRef(runAction);
@@ -109,6 +110,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
   const readQuestions = React.useRef(new Set<string>());
   React.useEffect(() => {
     if (!live) {
+      if (!callEnded) return;
       told.current = null;
       readQuestions.current.clear();
       for (const { slowTimer } of pending.current) clearTimeout(slowTimer);
@@ -147,7 +149,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
       known.add(row.text);
       appendContext(agentContext(row.text));
     }
-  }, [rows, turnRunning, live, asksSent, appendContext, announceContext]);
+  }, [rows, turnRunning, live, callEnded, asksSent, appendContext, announceContext]);
 }
 
 type HandOver = { state: "sent"; anchor: DelegationAnchor } | { state: "unheard" } | { state: "not_sent" };

@@ -115,6 +115,38 @@ describe("useVoiceDelegation — pergunta ao agente do card", () => {
     expect(call.announceContext).not.toHaveBeenCalled();
   });
 
+  it("pedido feito antes de a chamada reconectar é falado quando a sessão nova entra no ar", () => {
+    const { call, view, ask, sendUrgentToAgent } = setup();
+    ask("call_r1", "Rode os testes do back.");
+    const rows: SdkRow[] = [
+      { kind: "user", id: "u1", text: sentRequest(sendUrgentToAgent), state: "sent" },
+      { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false },
+    ];
+    call.snap = { ...call.snap, state: "connecting" };
+    view.rerender({ rows });
+    expect(call.announceContext).not.toHaveBeenCalled();
+    call.snap = { ...call.snap, state: "live" };
+    view.rerender({ rows });
+    expect(call.announceContext).toHaveBeenCalledTimes(1);
+    expect(call.announceContext.mock.calls[0]![0]).toContain("12 verdes.");
+  });
+
+  it("o que a voz já contou antes da queda não é contado de novo depois da reconexão", () => {
+    const { call, view, ask, sendUrgentToAgent } = setup();
+    ask("call_r2", "Rode os testes do back.");
+    const rows: SdkRow[] = [
+      { kind: "user", id: "u1", text: sentRequest(sendUrgentToAgent), state: "sent" },
+      { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false },
+    ];
+    view.rerender({ rows });
+    call.snap = { ...call.snap, state: "connecting" };
+    view.rerender({ rows });
+    call.snap = { ...call.snap, state: "live" };
+    view.rerender({ rows });
+    expect(call.announceContext).toHaveBeenCalledTimes(1);
+    expect(call.appendContext).not.toHaveBeenCalledWith(expect.stringContaining("12 verdes."));
+  });
+
   it("pedido sem resultado depois do prazo: a voz fica sabendo, uma vez, que o agente ainda não terminou", () => {
     vi.useFakeTimers();
     onTestFinished(() => {
