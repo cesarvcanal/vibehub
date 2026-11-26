@@ -380,10 +380,10 @@ function reviewRoutingDenial(toolName, toolInput, availableAgentTypes) {
   if (!reviewerAvailable) {
     return `Blocked by vibehub: this is a code review, and the Code Review profile (subagent_type "${CODE_REVIEWER_AGENT_TYPE}") is not available in this session. Tell the person the review could not run as Code Review, and why; never run it as general-purpose, and never present another agent's result as a Code Review.`;
   }
-  const how = forkedReviewSkill
+  const rerouteInstruction = forkedReviewSkill
     ? `The built-in code-review skill runs in a general-purpose subagent. Dispatch the Agent tool with subagent_type "${CODE_REVIEWER_AGENT_TYPE}" instead, with this skill's args as the request, verbatim.`
     : `Dispatch it again with subagent_type "${CODE_REVIEWER_AGENT_TYPE}", the same description and the same prompt.`;
-  return `Blocked by vibehub: code reviews run in the Code Review profile, never in general-purpose. ${how} If the project's CLAUDE.md maps a skill to code review and you have not invoked it this turn, invoke it first. Tell the person which profile ran the review.`;
+  return `Blocked by vibehub: code reviews run in the Code Review profile, never in general-purpose. ${rerouteInstruction} If the project's CLAUDE.md maps a skill to code review and you have not invoked it this turn, invoke it first. Tell the person which profile ran the review.`;
 }
 
 // PreToolUse hook — mirror of `sdkGateAction` in protocol.ts. "same-as-terminal": everything is
