@@ -1,11 +1,13 @@
+import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import type { AnalysisConversation as Conversation, AnalysisReadModel } from "@/api/types";
 import { boardApi } from "@/features/board/api";
-import { FleetChat } from "@/features/board/components/FleetChat";
+import { FleetChat, FleetGathering } from "@/features/board/components/FleetChat";
+import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { cardAnalysisConversationKey } from "@/features/board/lib/analysis";
 import type { CardStateKind } from "@/features/board/lib/board";
-import { analysisFleetChat } from "@/features/board/lib/fleetChat";
+import { analysisFleetChat, type FleetChatEntry } from "@/features/board/lib/fleetChat";
 import { AnalysisTimeline } from "@/features/review/components/AnalysisTimeline";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT } from "@/i18n";
@@ -17,28 +19,68 @@ export function AnalysisConversation({ cardId, read, cardState }: {
   read?: AnalysisReadModel;
   cardState: CardStateKind | undefined;
 }) {
+  const cardMayRunFleet = cardState === undefined || cardState === "working";
+  const fleetMayStillCome = read === undefined && cardMayRunFleet;
+  const conversationQuery = useQuery({
+    queryKey: cardAnalysisConversationKey(cardId),
+    queryFn: () => boardApi.readAnalysisConversation(cardId),
+    refetchInterval: (query) => {
+      const conversation = query.state.data;
+      const fleetStillComing = conversation === null && fleetMayStillCome;
+      const fleetTalking = conversation ? !conversation.finished : false;
+      return fleetStillComing || fleetTalking ? CONVERSATION_POLL_MS : false;
+    },
+  });
+  const conversation = conversationQuery.data;
+  const [waitedForFleet, setWaitedForFleet] = React.useState(false);
+  if (conversation === null && fleetMayStillCome && !waitedForFleet) setWaitedForFleet(true);
+  const entries = conversation ? analysisFleetChat(conversation) : [];
+  const bottomContent = `${entries.map((entry) => entry.id).join("|")}:${read?.timeline.length ?? 0}`;
+  const stick = useStickToBottom(bottomContent, { smooth: true });
   return (
-    <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1">
-      <FleetSection cardId={cardId} />
-      {read ? <AnalysisTimeline timeline={read.timeline} analysis={read.analysis} cardState={cardState} /> : null}
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={stick.scrollerRef}
+        onScroll={stick.onScroll}
+        data-testid="analysis-conversation-scroller"
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
+      >
+        <FleetSection
+          isPending={conversationQuery.isPending}
+          error={conversationQuery.error}
+          conversation={conversation ?? null}
+          entries={entries}
+          fleetMayStillCome={fleetMayStillCome}
+          speechesArriveLive={waitedForFleet}
+        />
+        {read ? <AnalysisTimeline timeline={read.timeline} analysis={read.analysis} cardState={cardState} /> : null}
+      </div>
+      <JumpToLatest stick={stick} />
     </div>
   );
 }
 
-function FleetSection({ cardId }: { cardId: string }) {
+function FleetSection({ isPending, error, conversation, entries, fleetMayStillCome, speechesArriveLive }: {
+  isPending: boolean;
+  error: Error | null;
+  conversation: Conversation | null;
+  entries: FleetChatEntry[];
+  fleetMayStillCome: boolean;
+  speechesArriveLive: boolean;
+}) {
   const t = useT();
-  const conversationQuery = useQuery({
-    queryKey: cardAnalysisConversationKey(cardId),
-    queryFn: () => boardApi.readAnalysisConversation(cardId),
-    refetchInterval: (query) => (query.state.data && !query.state.data.finished ? CONVERSATION_POLL_MS : false),
-  });
-  if (conversationQuery.isPending) return <p className="text-xs text-muted-foreground">{t("common.loading")}</p>;
-  if (conversationQuery.isError) return <p className="text-xs text-destructive">{apiErrorMessage(conversationQuery.error)}</p>;
-  if (!conversationQuery.data) return <p className="text-xs text-muted-foreground">{t("analysis.conversation.empty")}</p>;
-  return <FleetConversation conversation={conversationQuery.data} />;
+  if (isPending) return <p className="text-xs text-muted-foreground">{t("common.loading")}</p>;
+  if (error) return <p className="text-xs text-destructive">{apiErrorMessage(error)}</p>;
+  if (conversation) return <FleetConversation conversation={conversation} entries={entries} speechesArriveLive={speechesArriveLive} />;
+  if (!fleetMayStillCome) return <p className="text-xs text-muted-foreground">{t("analysis.conversation.empty")}</p>;
+  return <FleetGathering title={t("analysis.conversation.gathering.title")} body={t("analysis.conversation.gathering.body")} />;
 }
 
-function FleetConversation({ conversation }: { conversation: Conversation }) {
+function FleetConversation({ conversation, entries, speechesArriveLive }: {
+  conversation: Conversation;
+  entries: FleetChatEntry[];
+  speechesArriveLive: boolean;
+}) {
   const t = useT();
   const answered = conversation.agents.filter((agent) => agent.status === "done").length;
   return (
@@ -51,7 +93,7 @@ function FleetConversation({ conversation }: { conversation: Conversation }) {
           done: answered, total: conversation.agents.length,
         })}
       </p>
-      <FleetChat entries={analysisFleetChat(conversation)} label={t("analysis.conversation.aria")} />
+      <FleetChat entries={entries} label={t("analysis.conversation.aria")} allArriveLive={speechesArriveLive} />
     </div>
   );
 }

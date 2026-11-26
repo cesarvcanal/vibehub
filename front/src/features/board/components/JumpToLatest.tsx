@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArrowDown } from "lucide-react";
+import { animateScrollToBottom } from "@/lib/animateScrollToBottom";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
@@ -34,20 +35,31 @@ export interface StickToBottom {
  * the reader is at the bottom the effect keeps them there; while they are scrolled up it only
  * remembers that something new arrived.
  */
-export function useStickToBottom(content: unknown): StickToBottom {
+export function useStickToBottom(content: unknown, { smooth = false }: { smooth?: boolean } = {}): StickToBottom {
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   const stickRef = React.useRef(true);
+  const lastScrollTop = React.useRef(0);
   const [atBottom, setAtBottom] = React.useState(true);
   const [newSince, setNewSince] = React.useState(false);
   const first = React.useRef(true);
+  const cancelGlide = React.useRef<(() => void) | null>(null);
 
   const onScroll = React.useCallback((): void => {
     const el = scrollerRef.current;
     if (!el) return;
-    const at = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
-    stickRef.current = at;
-    setAtBottom(at);
-    if (at) setNewSince(false);
+    const nearEnd = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD_PX;
+    const movedUp = el.scrollTop < lastScrollTop.current;
+    lastScrollTop.current = el.scrollTop;
+    const glidingDown = cancelGlide.current !== null && !movedUp;
+    const stuck = nearEnd || glidingDown;
+    stickRef.current = stuck;
+    setAtBottom(stuck);
+    if (stuck) {
+      setNewSince(false);
+      return;
+    }
+    cancelGlide.current?.();
+    cancelGlide.current = null;
   }, []);
 
   const scrollToBottom = React.useCallback((): void => {
@@ -64,15 +76,26 @@ export function useStickToBottom(content: unknown): StickToBottom {
   React.useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (el && stickRef.current) {
+      cancelGlide.current?.();
+      cancelGlide.current = null;
+      lastScrollTop.current = el.scrollTop;
+      if (smooth && !first.current) {
+        const cancel = animateScrollToBottom(el, () => {
+          if (cancelGlide.current === cancel) cancelGlide.current = null;
+        });
+        cancelGlide.current = cancel;
+        return;
+      }
       el.scrollTop = el.scrollHeight;
       return;
     }
     // Scrolled up: never yank — just note that the conversation moved on (skip the mount pass,
     // which is the replay drawing what was already there).
     if (!first.current) setNewSince(true);
-  }, [content]);
+  }, [content, smooth]);
   React.useEffect(() => {
     first.current = false;
+    return () => cancelGlide.current?.();
   }, []);
 
   return { scrollerRef, onScroll, atBottom, newSince, scrollToBottom };

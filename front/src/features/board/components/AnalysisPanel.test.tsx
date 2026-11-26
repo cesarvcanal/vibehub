@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
 import { cleanup, configure, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { apiReject, renderApp, setupState } from "@/test/render";
@@ -83,9 +83,16 @@ afterEach(() => {
   setLanguage("en");
 });
 
+const stateOf = (kind: CardStateKind, summary?: string): CardState => ({ kind, label: kind, ...(summary ? { summary } : {}) });
+
+async function renderReportTab(analysisAnswer: CardAnalysisResponse) {
+  renderPanel(analysisAnswer);
+  await userEvent.click(await screen.findByRole("tab", { name: "Relatório" }));
+}
+
 describe("painel da análise de PR", () => {
   it("mostra o veredito, as contagens e o estado de cada dimensão com o motivo de quem não rodou", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"));
+    await renderReportTab(readModel(doneReport(), "not_apt"));
     expect(await screen.findByRole("heading", { name: "Análise do PR #312" })).toBeInTheDocument();
     expect(screen.getByText("Não apto")).toBeInTheDocument();
     expect(screen.getByText("1 corrigido")).toBeInTheDocument();
@@ -110,7 +117,7 @@ describe("painel da análise de PR", () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
       : dimension);
-    renderPanel(readModel(doneReport({ dimensions }), "not_apt", { tests: "attention" }, ["tests"]));
+    await renderReportTab(readModel(doneReport({ dimensions }), "not_apt", { tests: "attention" }, ["tests"]));
     expect(await screen.findByText("Não apto")).toBeInTheDocument();
     const testsDimension = within(screen.getByRole("list", { name: "Dimensões revisadas" })).getByText("Testes").closest("li")!;
     expect(within(testsDimension).getByText("atenção")).toBeInTheDocument();
@@ -118,7 +125,7 @@ describe("painel da análise de PR", () => {
   });
 
   it("agrupa os achados por classe, com arquivo:linha, prova e o commit que corrigiu", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"));
+    await renderReportTab(readModel(doneReport(), "not_apt"));
     const blockers = await screen.findByRole("region", { name: "Bloqueantes" });
     expect(within(blockers).getByText("Sessão SSO não expira com o token")).toBeInTheDocument();
     expect(within(blockers).getByText("back/src/auth/sso.ts:84")).toBeInTheDocument();
@@ -133,7 +140,7 @@ describe("painel da análise de PR", () => {
     const findings = doneReport().findings.map((finding) => finding.id === "f3"
       ? { ...finding, status: "decided" as const, decision: "fica: a conta local é só do admin" }
       : finding);
-    renderPanel(readModel(doneReport({ findings }), "apt"));
+    await renderReportTab(readModel(doneReport({ findings }), "apt"));
     const questions = await screen.findByRole("region", { name: "Dúvidas" });
     expect(within(questions).getByText("decidido: fica: a conta local é só do admin")).toBeInTheDocument();
     expect(within(questions).queryByText("esperando decisão")).not.toBeInTheDocument();
@@ -143,14 +150,14 @@ describe("painel da análise de PR", () => {
   it("a prova mostra o detalhe que o achado traz, junto do tipo e da referência", async () => {
     const [fixedBlocking, openQuestion] = doneReport().findings;
     const withDetail = { ...fixedBlocking!, proof: { kind: "scenario" as const, ref: "sso.ts:84", detail: "token expirado continua entrando" } };
-    renderPanel(readModel(doneReport({ findings: [withDetail, openQuestion!] }), "not_apt"));
+    await renderReportTab(readModel(doneReport({ findings: [withDetail, openQuestion!] }), "not_apt"));
     const blockers = await screen.findByRole("region", { name: "Bloqueantes" });
     expect(within(blockers).getByText("cenário · sso.ts:84")).toBeInTheDocument();
     expect(within(blockers).getByText("token expirado continua entrando")).toBeInTheDocument();
   });
 
   it("o corpo tem overflow-y-auto, overflow-x-hidden e overflow-wrap:anywhere, para o caminho longo quebrar em vez de rolar de lado", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"));
+    await renderReportTab(readModel(doneReport(), "not_apt"));
     const body = (await screen.findByRole("list", { name: "Dimensões revisadas" })).parentElement;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
   });
@@ -202,8 +209,6 @@ describe("painel da análise de PR", () => {
 
 describe("andamento da correção no painel da análise", () => {
   const noConversation = () => ({ conversation: null });
-
-  const stateOf = (kind: CardStateKind, summary?: string): CardState => ({ kind, label: kind, ...(summary ? { summary } : {}) });
 
   it.each<[CardStateKind, string]>([
     ["working", "A IA está corrigindo os achados."],
@@ -431,7 +436,6 @@ describe("aba Conversa: a correção depois da frota", () => {
     entry({ kind: "delivered", reason: "gate", stopped: true, output: "lint: 12 erros em FormasPagamento.page.tsx" }, 4),
     entry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 1 }, 5),
   ];
-  const stateOf = (kind: CardStateKind): CardState => ({ kind, label: kind });
   const openConversation = async () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
   };
@@ -504,13 +508,88 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
   };
 
-  it("o painel abre no relatório e só lê a conversa quando a aba é aberta", async () => {
+  it("o painel abre na conversa dos agentes, e o relatório fica na outra aba", async () => {
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
-    expect(await screen.findByRole("tab", { name: "Relatório" })).toHaveAttribute("aria-selected", "true");
-    expect(get).not.toHaveBeenCalledWith("/cards/c1/analysis/conversation");
-    await openConversation();
+    expect(await screen.findByRole("tab", { name: "Conversa" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith("/cards/c1/analysis/conversation");
+    await userEvent.click(screen.getByRole("tab", { name: "Relatório" }));
+    expect(await screen.findByRole("list", { name: "Dimensões revisadas" })).toBeInTheDocument();
+  });
+
+  it("antes de a frota falar, a conversa mostra a frota se reunindo e a primeira fala entra sozinha, sem reabrir o painel", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const answers: AnalysisConversationResponse[] = [{ conversation: null }];
+    renderPanel({ analysis: null }, undefined, () => answers[answers.length - 1]!);
+    expect(await screen.findByRole("status", { name: "Reunindo a frota de agentes" })).toBeInTheDocument();
+    answers.push(fleetTalk);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Reunindo a frota de agentes" })).not.toBeInTheDocument();
+    const [firstSpeech] = screen.getAllByTestId("fleet-chat-message");
+    expect(firstSpeech!.closest("li")).toHaveAttribute("data-arrived", "true");
+  });
+
+  it("card que parou antes de a frota falar não promete conversa ao vivo nem fica relendo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => { vi.useRealTimers(); });
+    renderPanel({ analysis: null }, undefined, () => ({ conversation: null }), stateOf("your_turn"));
+    expect(await screen.findByText("A frota de agentes não rodou neste card.")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Reunindo a frota de agentes" })).not.toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation").length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation")).toHaveLength(readsBefore);
+  });
+
+  it("um agente que termina enquanto outro ainda digita faz a conversa descer até a fala nova", async () => {
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const bothTyping: AnalysisConversationResponse = {
+      conversation: {
+        runId: "wf_a1", finished: false,
+        agents: [
+          { id: "a1", label: "revisão:security", phase: "Revisão", status: "running" },
+          { id: "a2", label: "revisão:correctness", phase: "Revisão", status: "running" },
+        ],
+        items: [],
+      },
+    };
+    const securityAnswered: AnalysisConversationResponse = {
+      conversation: {
+        ...bothTyping.conversation!,
+        agents: [{ ...bothTyping.conversation!.agents[0]!, status: "done" }, bothTyping.conversation!.agents[1]!],
+        items: [{ agentId: "a1", at: 1, kind: "text", text: "O token vaza no log." }],
+      },
+    };
+    const answers = [bothTyping];
+    renderPanel({ analysis: null }, undefined, () => answers[answers.length - 1]!, stateOf("working"));
+    expect(await screen.findAllByTestId("fleet-chat-typing")).toHaveLength(2);
+    const scroller = screen.getByTestId("analysis-conversation-scroller");
+    const layout = { scrollHeight: 1_000, scrollTop: 600 };
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => layout.scrollHeight });
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true, get: () => layout.scrollTop, set: (top: number) => { layout.scrollTop = top; },
+    });
+    answers.push(securityAnswered);
+    layout.scrollHeight = 1_300;
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(layout.scrollTop).toBe(900);
+  });
+
+  it("com o relatório gravado e nenhuma conversa, diz que a frota não rodou e para de reler", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => { vi.useRealTimers(); });
+    renderPanel(readModel(doneReport(), "not_apt"));
+    expect(await screen.findByText("A frota de agentes não rodou neste card.")).toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation").length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation")).toHaveLength(readsBefore);
   });
 
   it("a aba Conversa vem antes da aba Relatório", async () => {
@@ -578,12 +657,6 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     await userEvent.click(within(message!).getByRole("button", { name: "ver mais" }));
     expect(within(message!).getByTestId("fleet-chat-speech")).toHaveAttribute("data-collapsed", "false");
     expect(within(message!).getByRole("button", { name: "ver menos" })).toBeInTheDocument();
-  });
-
-  it("card sem frota diz que a frota ainda não rodou", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"));
-    await openConversation();
-    expect(await screen.findByText("A frota de agentes ainda não rodou neste card.")).toBeInTheDocument();
   });
 
   it("leitura que falhou mostra o erro do servidor", async () => {

@@ -41,7 +41,7 @@ function mergeRefusalTitle(reason: string, t: Translate): string {
 export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; cardState?: CardState; onClose: () => void }) {
   const t = useT();
   const analysisQuery = useCardAnalysis(cardId, { enabled: true });
-  const [tab, setTab] = React.useState<"report" | "conversation">("report");
+  const [tab, setTab] = React.useState<"report" | "conversation">("conversation");
   const read = analysisQuery.data;
   const progress = read?.analysis && cardState ? analysisProgress(read.verdict, cardState.kind) : null;
   const header = (
