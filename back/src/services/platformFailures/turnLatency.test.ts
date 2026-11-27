@@ -128,6 +128,24 @@ describe("turno parado", () => {
     expect(markNewlyStalledTurns(1_000 + 10 * STALLED_TURN_MS)).toEqual([]);
   });
 
+  it("mensagem que entra na fila atrás de uma ferramenta aberta num turno que o próprio CLI abriu não é turno parado", () => {
+    noteTurnEvent("card-1", { type: "tool_use", id: "deliver-1" }, 0);
+    noteTurnSent("card-1", 1_000);
+    expect(markNewlyStalledTurns(1_000 + 10 * STALLED_TURN_MS)).toEqual([]);
+    noteTurnEvent("card-1", { type: "tool_result", id: "deliver-1" }, 400_000);
+    expect(markNewlyStalledTurns(400_000 + STALLED)).toEqual([{ cardId: "card-1", sentAt: 1_000, lastSignalAt: 400_000 }]);
+  });
+
+  it.each([
+    ["fechou com result", () => noteTurnEvent("card-1", { type: "result" }, 500)],
+    ["perdeu o driver", () => noteDriverGone("card-1")],
+  ])("ferramenta de um turno que %s não segura o turno seguinte", (_cause, closeTurn) => {
+    noteTurnEvent("card-1", { type: "tool_use", id: "tool-1" }, 0);
+    closeTurn();
+    noteTurnSent("card-1", 1_000);
+    expect(markNewlyStalledTurns(1_000 + STALLED)).toEqual([{ cardId: "card-1", sentAt: 1_000, lastSignalAt: 1_000 }]);
+  });
+
   it("bloco de ferramenta aberto e abandonado sem o tool_use não deixa o turno imune", () => {
     noteTurnSent("card-1", 0);
     noteTurnEvent("card-1", { type: "tool_use_start", id: "tool-abortado" }, 1_000);
