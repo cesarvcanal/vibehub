@@ -5,6 +5,7 @@ import { logger } from "../../utils/logger.js";
 import { readHistory } from "../sdk/history.js";
 import { formatVoiceContext } from "./context.js";
 import { summarizeConversation } from "./summary.js";
+import { readUpstreamErrorCode } from "./readUpstreamErrorCode.js";
 import { EXECUTOR_MODEL, executorInstructions, voiceToolDefinitions, type FunctionTool } from "./executor.js";
 
 /**
@@ -199,17 +200,6 @@ export function resetCreateSlots(): void {
   recentCreates.clear();
 }
 
-/** What the upstream said, reduced to what is safe to log: status and error code, never the body. */
-async function upstreamCode(resp: Response): Promise<string | null> {
-  try {
-    const body = (await resp.json()) as { error?: { code?: unknown; type?: unknown } };
-    const code = body.error?.code ?? body.error?.type;
-    return typeof code === "string" ? code.slice(0, 80) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** The upstream's failure as the browser should hear it. PURE. */
 export function upstreamFailure(status: number): VoiceLiveError {
   if (status === 401 || status === 403) return new VoiceLiveError(502, "OpenAI rejected the API key");
@@ -269,7 +259,7 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
   }
 
   if (!resp.ok) {
-    logger.warn({ status: resp.status, code: await upstreamCode(resp) }, "voice: GPT-Live refused the session");
+    logger.warn({ status: resp.status, code: await readUpstreamErrorCode(resp) }, "voice: GPT-Live refused the session");
     throw upstreamFailure(resp.status);
   }
   const body = (await resp.json().catch(() => null)) as

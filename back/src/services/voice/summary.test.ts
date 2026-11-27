@@ -62,6 +62,27 @@ describe("summarizeConversation", () => {
     expect(await summarize(`card-d ${failure}`, conversation, healthy)).toBe("agora sim");
   });
 
+  it("a recusa da OpenAI diz o código do erro dela, sem o corpo da resposta", async () => {
+    const refusal = { error: { message: "Invalid body: failed to parse JSON value.", type: "invalid_request_error", param: null, code: "invalid_json" } };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(refusal), { status: 400, headers: { "content-type": "application/json" } }));
+    const failure = summarize("card-g", conversation, fetchImpl).catch((err: Error) => err.message);
+    expect(await failure).toBe("OpenAI refused the conversation summary (HTTP 400, invalid_json)");
+  });
+
+  it("a recusa sem JSON (página de erro de um proxy) diz só o status HTTP", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 }));
+    const failure = summarize("card-i", conversation, fetchImpl).catch((err: Error) => err.message);
+    expect(await failure).toBe("OpenAI refused the conversation summary (HTTP 502)");
+  });
+
+  it("uma mensagem cortada no meio de um emoji ainda sai como Unicode válido para a OpenAI", async () => {
+    const fetchImpl = vi.fn(async () => modelAnswer("resumo"));
+    const emojiAtTheCut = `${"a".repeat(3_998)}😀 fim`;
+    await summarize("card-h", [{ type: "user", text: emojiAtTheCut, at: 1 }], fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).input.isWellFormed()).toBe(true);
+  });
+
   it("a chamada desistida (aba fechada) cancela o pedido à OpenAI", async () => {
     const gone = new AbortController();
     const fetchImpl = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
