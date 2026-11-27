@@ -71,7 +71,8 @@ function trackMainAgentTool(cardId: string, event: { type: DriverEvent["type"]; 
   }
   if (event.type !== "tool_use" || event.parentToolUseId) return;
   const runningToolIds = runningToolIdsByCard.get(cardId) ?? new Set<string>();
-  runningToolIdsByCard.set(cardId, runningToolIds.add(event.id));
+  runningToolIds.add(event.id);
+  runningToolIdsByCard.set(cardId, runningToolIds);
 }
 
 function trackStallClock(openTurn: OpenTurn, event: { type: DriverEvent["type"]; phase?: unknown }, at: number): void {
