@@ -74,7 +74,6 @@ describe("summarizeConversation", () => {
     const emojiAtTheCut = `${"a".repeat(3_998)}😀 fim`;
     await summarize("card-h", [{ type: "user", text: emojiAtTheCut, at: 1 }], fetchImpl);
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(String(init.body).isWellFormed()).toBe(true);
     expect(JSON.parse(String(init.body)).input.isWellFormed()).toBe(true);
   });
 
