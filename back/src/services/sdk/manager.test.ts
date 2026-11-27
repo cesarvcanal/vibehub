@@ -40,7 +40,9 @@ import type { AgentTaskEvent } from "./toolResult.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
-import { getLastUserStop, onSlowTurns, resetTurnLatencyForTesting, SLOW_FIRST_OUTPUT_MS } from "../platformFailures/turnLatency.js";
+import {
+  getLastUserStop, markNewlyStalledTurns, onSlowTurns, resetTurnLatencyForTesting, SLOW_FIRST_OUTPUT_MS, STALLED_TURN_MS,
+} from "../platformFailures/turnLatency.js";
 
 /**
  * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
@@ -3685,5 +3687,23 @@ describe("latência até a primeira resposta — fiação para as falhas da plat
       spawned[spawned.length - 1]!.stdout.emit("data", line({ type: "result", isError: false }));
     }
     expect(reportedCards).toEqual([]);
+  });
+
+  it.each([
+    ["aberta antes do stop", { before: true, late: false }],
+    ["anunciada pelo driver já parado, antes de o processo fechar", { before: false, late: true }],
+  ])("ferramenta %s não protege do aviso de turno parado o turno do sucessor", (_case, toolAnnounced) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    ensure();
+    const deliverToolUse = line({ type: "tool_use", id: "deliver-1", name: "mcp__vibehub__vibehub_deliver", input: {} });
+    if (toolAnnounced.before) spawned[0]!.stdout.emit("data", deliverToolUse);
+    stopCardDriver(CARD);
+    const successor = ensure();
+    if (toolAnnounced.late) spawned[0]!.stdout.emit("data", deliverToolUse);
+    spawned[0]!.emit("close", null, "SIGTERM");
+    injectSystemTurn(successor, "revisa o PR", { kind: "system", name: "vibehub" }, 1);
+    const sentAt = Date.now();
+    expect(markNewlyStalledTurns(sentAt + STALLED_TURN_MS + 1)).toEqual([{ cardId: CARD, sentAt, lastSignalAt: sentAt }]);
   });
 });

@@ -719,7 +719,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
   if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
-  noteTurnEvent(session.cardId, event, Date.now());
+  if (!session.closed) noteTurnEvent(session.cardId, event, Date.now());
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
@@ -2505,6 +2505,7 @@ export function stopCardDriver(cardId: string): void {
   if (!session) return;
   sessions.delete(cardId);
   killDriverChild(session);
+  noteDriverGone(cardId);
   // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   session.marker = undefined;
