@@ -5,7 +5,7 @@ import { logger } from "../../utils/logger.js";
 import { readHistory } from "../sdk/history.js";
 import { formatVoiceContext } from "./context.js";
 import { summarizeConversation } from "./summary.js";
-import { upstreamCode } from "./upstreamCode.js";
+import { readUpstreamErrorCode } from "./readUpstreamErrorCode.js";
 import { EXECUTOR_MODEL, executorInstructions, voiceToolDefinitions, type FunctionTool } from "./executor.js";
 
 /**
@@ -259,7 +259,7 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
   }
 
   if (!resp.ok) {
-    logger.warn({ status: resp.status, code: await upstreamCode(resp) }, "voice: GPT-Live refused the session");
+    logger.warn({ status: resp.status, code: await readUpstreamErrorCode(resp) }, "voice: GPT-Live refused the session");
     throw upstreamFailure(resp.status);
   }
   const body = (await resp.json().catch(() => null)) as
