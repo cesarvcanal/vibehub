@@ -62,6 +62,13 @@ describe("summarizeConversation", () => {
     expect(await summarize(`card-d ${failure}`, conversation, healthy)).toBe("agora sim");
   });
 
+  it("a recusa da OpenAI diz o código do erro dela, sem o corpo da resposta", async () => {
+    const refusal = { error: { message: "Invalid body: failed to parse JSON value.", type: "invalid_request_error", param: null, code: "invalid_json" } };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(refusal), { status: 400, headers: { "content-type": "application/json" } }));
+    const failure = summarize("card-g", conversation, fetchImpl).catch((err: Error) => err.message);
+    expect(await failure).toBe("OpenAI refused the conversation summary (HTTP 400, invalid_json)");
+  });
+
   it("uma mensagem cortada no meio de um emoji ainda sai como Unicode válido para a OpenAI", async () => {
     const fetchImpl = vi.fn(async () => modelAnswer("resumo"));
     const emojiAtTheCut = `${"a".repeat(3_998)}😀 fim`;

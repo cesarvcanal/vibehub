@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { HistoryEvent } from "../sdk/history.js";
 import { clipLine } from "../../utils/clipLine.js";
 import { formatVoiceContext } from "./context.js";
+import { upstreamCode } from "./upstreamCode.js";
 
 // external: Responses API, raw HTTP — the text is in output[].content[] of type "output_text"; `output_text` at the top is SDK-only (developers.openai.com/api/reference/resources/responses/methods/create)
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -69,7 +70,10 @@ export async function summarizeConversation(opts: SummarizeConversationOptions):
     }),
     signal: AbortSignal.any(signals),
   });
-  if (!resp.ok) throw new Error(`OpenAI refused the conversation summary (HTTP ${resp.status})`);
+  if (!resp.ok) {
+    const refusalCode = await upstreamCode(resp);
+    throw new Error(`OpenAI refused the conversation summary (HTTP ${resp.status}${refusalCode ? `, ${refusalCode}` : ""})`);
+  }
   const text = outputText(await resp.json());
   if (!text) throw new Error("the conversation summary came back without text");
   const summary = clipLine(text, SUMMARY_MAX_CHARS);

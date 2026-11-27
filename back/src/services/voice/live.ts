@@ -5,6 +5,7 @@ import { logger } from "../../utils/logger.js";
 import { readHistory } from "../sdk/history.js";
 import { formatVoiceContext } from "./context.js";
 import { summarizeConversation } from "./summary.js";
+import { upstreamCode } from "./upstreamCode.js";
 import { EXECUTOR_MODEL, executorInstructions, voiceToolDefinitions, type FunctionTool } from "./executor.js";
 
 /**
@@ -197,17 +198,6 @@ export function takeCreateSlot(user: string, now: number = Date.now()): void {
 
 export function resetCreateSlots(): void {
   recentCreates.clear();
-}
-
-/** What the upstream said, reduced to what is safe to log: status and error code, never the body. */
-async function upstreamCode(resp: Response): Promise<string | null> {
-  try {
-    const body = (await resp.json()) as { error?: { code?: unknown; type?: unknown } };
-    const code = body.error?.code ?? body.error?.type;
-    return typeof code === "string" ? code.slice(0, 80) : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The upstream's failure as the browser should hear it. PURE. */
