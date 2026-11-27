@@ -65,10 +65,13 @@ export function noteTurnSent(cardId: string, at: number): void {
 
 function trackMainAgentTool(cardId: string, event: { type: DriverEvent["type"]; id?: unknown; parentToolUseId?: unknown }): void {
   if (typeof event.id !== "string") return;
-  if (event.type === "tool_result") runningToolIdsByCard.get(cardId)?.delete(event.id);
-  else if (event.type === "tool_use" && !event.parentToolUseId) {
-    runningToolIdsByCard.set(cardId, (runningToolIdsByCard.get(cardId) ?? new Set()).add(event.id));
+  if (event.type === "tool_result") {
+    runningToolIdsByCard.get(cardId)?.delete(event.id);
+    return;
   }
+  if (event.type !== "tool_use" || event.parentToolUseId) return;
+  const runningToolIds = runningToolIdsByCard.get(cardId) ?? new Set<string>();
+  runningToolIdsByCard.set(cardId, runningToolIds.add(event.id));
 }
 
 function trackStallClock(openTurn: OpenTurn, event: { type: DriverEvent["type"]; phase?: unknown }, at: number): void {
