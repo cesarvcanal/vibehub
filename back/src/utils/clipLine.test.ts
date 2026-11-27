@@ -11,6 +11,12 @@ describe("clipLine", () => {
     expect(clipLine("abcd", 4)).toBe("abcd");
   });
 
+  it("o corte nunca parte um emoji ao meio: o texto cortado continua Unicode válido", () => {
+    const clipped = clipLine("abc😀def", 5);
+    expect(clipped).toBe("abc…");
+    expect(clipped.isWellFormed()).toBe(true);
+  });
+
   it("texto ausente é a linha vazia", () => {
     expect(clipLine(undefined, 10)).toBe("");
   });

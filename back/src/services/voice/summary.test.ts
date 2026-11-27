@@ -62,6 +62,15 @@ describe("summarizeConversation", () => {
     expect(await summarize(`card-d ${failure}`, conversation, healthy)).toBe("agora sim");
   });
 
+  it("uma mensagem cortada no meio de um emoji ainda sai como Unicode válido para a OpenAI", async () => {
+    const fetchImpl = vi.fn(async () => modelAnswer("resumo"));
+    const emojiAtTheCut = `${"a".repeat(3_998)}😀 fim`;
+    await summarize("card-h", [{ type: "user", text: emojiAtTheCut, at: 1 }], fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(init.body).isWellFormed()).toBe(true);
+    expect(JSON.parse(String(init.body)).input.isWellFormed()).toBe(true);
+  });
+
   it("a chamada desistida (aba fechada) cancela o pedido à OpenAI", async () => {
     const gone = new AbortController();
     const fetchImpl = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
