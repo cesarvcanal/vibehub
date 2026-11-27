@@ -69,6 +69,12 @@ describe("summarizeConversation", () => {
     expect(await failure).toBe("OpenAI refused the conversation summary (HTTP 400, invalid_json)");
   });
 
+  it("a recusa sem JSON (página de erro de um proxy) diz só o status HTTP", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 }));
+    const failure = summarize("card-i", conversation, fetchImpl).catch((err: Error) => err.message);
+    expect(await failure).toBe("OpenAI refused the conversation summary (HTTP 502)");
+  });
+
   it("uma mensagem cortada no meio de um emoji ainda sai como Unicode válido para a OpenAI", async () => {
     const fetchImpl = vi.fn(async () => modelAnswer("resumo"));
     const emojiAtTheCut = `${"a".repeat(3_998)}😀 fim`;
